@@ -29,7 +29,7 @@ async function verifyGitHub(req: Request) {
   });
   if (payload.repository !== REPO) throw new Error("wrong_repository");
   if (payload.ref !== "refs/heads/main") throw new Error("wrong_ref");
-  if (!["schedule", "workflow_dispatch"].includes(String(payload.event_name || ""))) throw new Error("wrong_event");
+  if (!["schedule", "workflow_dispatch", "push"].includes(String(payload.event_name || ""))) throw new Error("wrong_event");
   const workflowRef = String(payload.job_workflow_ref || "");
   if (workflowRef && !workflowRef.startsWith(REPO + "/.github/workflows/process-video.yml@")) throw new Error("wrong_workflow");
 }
