@@ -46,7 +46,7 @@ Deno.serve(async (req: Request) => {
 
     const candidate = await supabase
       .from("videos")
-      .select("id,title,source_url,storage_path,rights_verified,youtube_video_id,status")
+      .select("id,source_id,title,source_url,storage_path,rights_verified,rights_basis,youtube_video_id,status")
       .eq("rights_verified", true)
       .is("youtube_video_id", null)
       .eq("status", "downloaded")
@@ -88,17 +88,29 @@ Deno.serve(async (req: Request) => {
     }
 
     const blob = file.data;
+
+    const sourceLookup = await supabase
+      .from("sources")
+      .select("name,license_type,terms_url")
+      .eq("id", candidate.data.source_id)
+      .single();
+    if (sourceLookup.error) throw new Error(`Source lookup failed: ${sourceLookup.error.message}`);
+
     const title = clip(candidate.data.title || "Hidden Beyond", 100);
     const description = clip(
       [
-        "Source: NASA Scientific Visualization Studio",
+        `Source: ${sourceLookup.data.name}`,
         `Original: ${candidate.data.source_url}`,
         "",
-        "Credit: NASA's Scientific Visualization Studio.",
-        "NASA SVS states its content is public domain unless otherwise noted. This bot only uploads items that passed its rights check."
-      ].join("\n"),
+        `Rights basis: ${candidate.data.rights_basis || sourceLookup.data.license_type || "Verified reusable source"}`,
+        sourceLookup.data.terms_url ? `Rights / terms: ${sourceLookup.data.terms_url}` : "",
+        "",
+        "Published automatically by Hidden Beyond from a source that passed the bot's rights checks."
+      ].filter(Boolean).join("\n"),
       5000
     );
+
+    const uploadContentType = blob.type || "video/mp4";
 
     const initUrl = new URL("https://www.googleapis.com/upload/youtube/v3/videos");
     initUrl.searchParams.set("uploadType", "resumable");
@@ -110,7 +122,7 @@ Deno.serve(async (req: Request) => {
       headers: {
         authorization: `Bearer ${token.access_token}`,
         "content-type": "application/json; charset=UTF-8",
-        "x-upload-content-type": "video/mp4",
+        "x-upload-content-type": uploadContentType,
         "x-upload-content-length": String(blob.size)
       },
       body: JSON.stringify({
@@ -142,7 +154,7 @@ Deno.serve(async (req: Request) => {
     const uploadRes = await fetch(uploadUrl, {
       method: "PUT",
       headers: {
-        "content-type": "video/mp4",
+        "content-type": uploadContentType,
         "content-length": String(blob.size)
       },
       body: blob
@@ -176,7 +188,8 @@ Deno.serve(async (req: Request) => {
       stage: "uploaded",
       channel_id: connection.data.channel_id,
       channel_title: connection.data.channel_title,
-      privacy_status: "public",
+      requested_privacy_status: "public",
+      actual_privacy_status: uploaded?.status?.privacyStatus || null,
       youtube_video_id: uploaded.id,
       video: update.data
     });
