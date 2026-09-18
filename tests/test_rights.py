@@ -17,9 +17,9 @@ def test_unverified_item_is_blocked():
     assert decision.allowed is False
 
 
-def test_auto_eligible_source_is_allowed():
+def test_trusted_source_still_needs_item_verification():
     decision = can_download(
         source_auto_eligible=True,
         item_rights_verified=False,
     )
-    assert decision.allowed is True
+    assert decision.allowed is False
