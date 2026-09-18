@@ -1,6 +1,10 @@
 name: Hidden Beyond Processor
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/process-video.yml"
   schedule:
     - cron: "17,47 * * * *"
   workflow_dispatch:
