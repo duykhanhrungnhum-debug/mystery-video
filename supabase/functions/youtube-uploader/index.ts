@@ -46,18 +46,18 @@ Deno.serve(async (req: Request) => {
 
     const candidate = await supabase
       .from("videos")
-      .select("id,source_id,title,source_url,storage_path,rights_verified,rights_basis,youtube_video_id,status")
+      .select("id,source_id,title,translated_title,source_url,storage_path,processed_storage_path,subtitle_storage_path,rights_verified,rights_basis,original_audio_verified,youtube_video_id,status")
       .eq("rights_verified", true)
       .is("youtube_video_id", null)
-      .eq("status", "downloaded")
-      .not("storage_path", "is", null)
+      .eq("status", "processed")
+      .not("processed_storage_path", "is", null)
       .order("id", { ascending: true })
       .limit(1)
       .maybeSingle();
 
     if (candidate.error) throw new Error(`Video lookup failed: ${candidate.error.message}`);
     if (!candidate.data) {
-      return Response.json({ ok: true, stage: "idle", message: "No downloaded rights-verified video is waiting for upload" });
+      return Response.json({ ok: true, stage: "idle", message: "No processed rights-verified video is waiting for upload" });
     }
 
     const clientId = Deno.env.get("YOUTUBE_CLIENT_ID")!;
@@ -81,7 +81,7 @@ Deno.serve(async (req: Request) => {
 
     const file = await supabase.storage
       .from("video-ingest")
-      .download(candidate.data.storage_path);
+      .download(candidate.data.processed_storage_path);
 
     if (file.error || !file.data) {
       throw new Error(`Storage download failed: ${file.error?.message || "missing file"}`);
@@ -96,7 +96,7 @@ Deno.serve(async (req: Request) => {
       .single();
     if (sourceLookup.error) throw new Error(`Source lookup failed: ${sourceLookup.error.message}`);
 
-    const title = clip(candidate.data.title || "Hidden Beyond", 100);
+    const title = clip(candidate.data.translated_title || candidate.data.title || "Hidden Beyond", 100);
     const description = clip(
       [
         `Source: ${sourceLookup.data.name}`,
@@ -105,6 +105,7 @@ Deno.serve(async (req: Request) => {
         `Rights basis: ${candidate.data.rights_basis || sourceLookup.data.license_type || "Verified reusable source"}`,
         sourceLookup.data.terms_url ? `Rights / terms: ${sourceLookup.data.terms_url}` : "",
         "",
+        "Vietnamese subtitles were generated automatically from the spoken audio. Original source audio is retained in the processed video.",
         "Published automatically by Hidden Beyond from a source that passed the bot's rights checks."
       ].filter(Boolean).join("\n"),
       5000
