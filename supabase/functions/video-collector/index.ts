@@ -143,7 +143,7 @@ function collectSvsMovies(value: unknown, out: any[] = []): any[] {
 }
 
 async function collectNasaSvs(supabase: any): Promise<Candidate | null> {
-  const queries = ["black hole", "aurora", "volcano", "asteroid"];
+  const queries = ["black hole", "dark matter", "gravitational wave", "asteroid", "exoplanet", "cosmic anomaly", "aurora"];
   for (const q of queries) {
     const search = await getJson(`https://svs.gsfc.nasa.gov/api/search/?search=${encodeURIComponent(q)}&limit=30`);
     for (const result of Array.isArray(search?.results) ? search.results : []) {
@@ -255,11 +255,7 @@ async function collectUsgs(supabase: any): Promise<Candidate | null> {
   const cameras = await getJson("https://api.waterdata.usgs.gov/nims/v0/cameras?returnFields=camId,camName,tlDir,newestImageDT");
   const preferred = (Array.isArray(cameras) ? cameras : [])
     .filter((c:any) => typeof c.camId === "string" && typeof c.tlDir === "string")
-    .sort((a:any,b:any) => {
-      const ar = /^HI_Kilauea_/i.test(a.camId) ? 0 : 1;
-      const br = /^HI_Kilauea_/i.test(b.camId) ? 0 : 1;
-      return ar - br;
-    });
+    .filter((c:any) => /^HI_Kilauea_/i.test(c.camId));
 
   for (const cam of preferred) {
     const id = String(cam.camId);
@@ -281,7 +277,7 @@ async function collectUsgs(supabase: any): Promise<Candidate | null> {
 }
 
 async function collectNasaImages(supabase: any): Promise<Candidate | null> {
-  const queries = ["black hole", "asteroid", "aurora", "volcano"];
+  const queries = ["black hole", "dark matter", "gravitational wave", "asteroid", "exoplanet", "aurora", "volcano"];
   for (const q of queries) {
     const search = await getJson(`https://images-api.nasa.gov/search?q=${encodeURIComponent(q)}&media_type=video&page_size=25`);
     for (const item of Array.isArray(search?.collection?.items) ? search.collection.items : []) {
@@ -372,6 +368,7 @@ async function storeAndUpload(candidate: Candidate, req:Request, botKey:string, 
         title: candidate.title,
         status: "skipped_no_audio",
         storage_path: null,
+        original_audio_verified: false,
         rights_verified: true,
         rights_basis: candidate.rightsBasis,
         download_url: candidate.downloadUrl
@@ -412,6 +409,9 @@ async function storeAndUpload(candidate: Candidate, req:Request, botKey:string, 
       title: candidate.title,
       status: "downloaded",
       storage_path: storagePath,
+      original_audio_verified: true,
+      processing_status: null,
+      processing_error: null,
       rights_verified: true,
       rights_basis: candidate.rightsBasis,
       download_url: candidate.downloadUrl
@@ -420,19 +420,6 @@ async function storeAndUpload(candidate: Candidate, req:Request, botKey:string, 
     .single();
   if (db.error) throw new Error(`Database upsert failed: ${db.error.message}`);
 
-  let uploadTrigger:any = null;
-  try {
-    const uploaderUrl = new URL("/functions/v1/youtube-uploader", req.url).toString();
-    const uploaderRes = await fetch(uploaderUrl, {
-      method:"POST",
-      headers:{ "content-type":"application/json", "x-bot-key":botKey },
-      body:JSON.stringify({ video_id: db.data.id })
-    });
-    uploadTrigger = { status:uploaderRes.status, result:await uploaderRes.json().catch(() => null) };
-  } catch (error) {
-    uploadTrigger = { status:"trigger_failed", error:String(error) };
-  }
-
   return {
     source_id:candidate.sourceId,
     title:candidate.title,
@@ -440,8 +427,7 @@ async function storeAndUpload(candidate: Candidate, req:Request, botKey:string, 
     bytes:body.byteLength,
     storage_path:storagePath,
     rights_verified:true,
-    database:db.data,
-    upload_trigger:uploadTrigger
+    database:db.data
   };
 }
 
@@ -491,7 +477,7 @@ Deno.serve(async (req: Request) => {
 
       return Response.json({
         ok:true,
-        stage:"downloaded_with_original_audio_and_upload_triggered",
+        stage:"downloaded_with_original_audio_ready_for_processing",
         original_audio_verified:true,
         skipped_no_audio: skippedNoAudio,
         ...result
