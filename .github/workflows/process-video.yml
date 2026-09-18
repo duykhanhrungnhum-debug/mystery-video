@@ -1,0 +1,124 @@
+name: Hidden Beyond Processor
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hidden-beyond-video-processor
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/processor-api
+      WHISPER_MODEL: small
+      TRANSLATION_MODEL: Helsinki-NLP/opus-mt-en-vi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install media and AI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-core
+          python -m pip install --upgrade pip
+          pip install "faster-whisper>=1.1,<2" "transformers>=4.45,<5" "sentencepiece>=0.2,<1" "torch>=2.2" "sacremoses>=0.1"
+
+      - name: Claim, translate, subtitle, render and complete one video
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          get_oidc() {
+            curl -fsS               -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-processor"               | python -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+
+          CLAIMED=0
+          COMPLETED=0
+          VIDEO_ID=""
+          FAIL_CODE="processing_failed"
+
+          on_exit() {
+            rc=$?
+            if [ "$rc" -ne 0 ] && [ "$CLAIMED" = "1" ] && [ "$COMPLETED" = "0" ]; then
+              token="$(get_oidc || true)"
+              if [ -n "$token" ]; then
+                err="processor workflow failed with exit code $rc"
+                if [ -f metadata.json ]; then
+                  err="$(python -c 'import json; d=json.load(open("metadata.json")); print(d.get("error") or d.get("status") or "processing failed")' 2>/dev/null || echo "$err")"
+                fi
+                jq -n --argjson video_id "$VIDEO_ID" --arg code "$FAIL_CODE" --arg error "$err"                   '{video_id:$video_id,code:$code,error:$error}' > fail.json
+                curl -sS -X POST "$PROCESSOR_API/fail"                   -H "Authorization: Bearer $token"                   -H "content-type: application/json"                   --data-binary @fail.json || true
+              fi
+            fi
+            exit "$rc"
+          }
+          trap on_exit EXIT
+
+          token="$(get_oidc)"
+          curl -fsS -X POST "$PROCESSOR_API/claim"             -H "Authorization: Bearer $token"             -H "content-type: application/json"             -d '{}' > claim.json
+
+          stage="$(jq -r '.stage' claim.json)"
+          if [ "$stage" = "idle" ]; then
+            echo "No processing job is waiting."
+            COMPLETED=1
+            exit 0
+          fi
+          if [ "$stage" != "claimed" ]; then
+            cat claim.json
+            exit 1
+          fi
+
+          CLAIMED=1
+          VIDEO_ID="$(jq -r '.job.video_id' claim.json)"
+          TITLE="$(jq -r '.job.title' claim.json)"
+          ORIGINAL_URL="$(jq -r '.job.original_download_url' claim.json)"
+          PROCESSED_URL="$(jq -r '.job.processed.signedUrl' claim.json)"
+          SUBTITLE_URL="$(jq -r '.job.subtitle.signedUrl' claim.json)"
+          PROCESSED_PATH="$(jq -r '.job.processed.path' claim.json)"
+          SUBTITLE_PATH="$(jq -r '.job.subtitle.path' claim.json)"
+
+          curl -fL "$ORIGINAL_URL" -o input.media
+
+          set +e
+          python scripts/process_video.py             --input input.media             --output processed.mp4             --srt vi.srt             --metadata metadata.json             --title "$TITLE"
+          processor_rc=$?
+          set -e
+
+          if [ "$processor_rc" -eq 3 ]; then
+            FAIL_CODE="no_speech"
+            exit 3
+          elif [ "$processor_rc" -eq 4 ]; then
+            FAIL_CODE="unsupported_language"
+            exit 4
+          elif [ "$processor_rc" -ne 0 ]; then
+            FAIL_CODE="processing_failed"
+            exit "$processor_rc"
+          fi
+
+          curl -fsS -X PUT "$PROCESSED_URL"             -H "content-type: video/mp4"             -H "cache-control: max-age=3600"             --data-binary @processed.mp4
+
+          curl -fsS -X PUT "$SUBTITLE_URL"             -H "content-type: application/x-subrip; charset=utf-8"             -H "cache-control: max-age=3600"             --data-binary @vi.srt
+
+          TRANSLATED_TITLE="$(jq -r '.translated_title' metadata.json)"
+          DETECTED_LANGUAGE="$(jq -r '.detected_language' metadata.json)"
+
+          token="$(get_oidc)"
+          jq -n             --argjson video_id "$VIDEO_ID"             --arg translated_title "$TRANSLATED_TITLE"             --arg transcript_language "$DETECTED_LANGUAGE"             --arg processed_path "$PROCESSED_PATH"             --arg subtitle_path "$SUBTITLE_PATH"             '{video_id:$video_id,translated_title:$translated_title,transcript_language:$transcript_language,processed_path:$processed_path,subtitle_path:$subtitle_path}'             > complete.json
+
+          curl -fsS -X POST "$PROCESSOR_API/complete"             -H "Authorization: Bearer $token"             -H "content-type: application/json"             --data-binary @complete.json > complete-response.json
+
+          jq . complete-response.json
+          COMPLETED=1
