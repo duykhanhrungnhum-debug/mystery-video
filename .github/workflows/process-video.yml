@@ -1,4 +1,4 @@
-name: Hidden Beyond Processor
+name: Hidden Beyond Processor # nllb-vi-v2
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
     env:
       PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/processor-api
       WHISPER_MODEL: small
-      TRANSLATION_MODEL: Helsinki-NLP/opus-mt-en-vi
+      TRANSLATION_MODEL: facebook/nllb-200-distilled-600M
 
     steps:
       - uses: actions/checkout@v4
