@@ -39,6 +39,30 @@ function stripHtml(value: string): string {
     .trim();
 }
 
+function hasOriginalAudioTrack(buffer: ArrayBuffer, contentType: string, url: string): boolean {
+  const bytes = new Uint8Array(buffer);
+  const decoder = new TextDecoder("latin1");
+  const text = decoder.decode(bytes);
+  const lowerType = (contentType || "").toLowerCase();
+  const lowerUrl = url.toLowerCase();
+
+  if (lowerType.includes("webm") || lowerUrl.endsWith(".webm")) {
+    return text.includes("A_OPUS") || text.includes("A_VORBIS") || text.includes("A_AAC") || text.includes("A_MPEG");
+  }
+
+  // MP4/MOV containers identify an audio media handler with the fourcc "soun".
+  // We also accept common audio sample-entry codec tags.
+  return text.includes("soun") ||
+    text.includes("mp4a") ||
+    text.includes("ac-3") ||
+    text.includes("ec-3") ||
+    text.includes("alac") ||
+    text.includes("lpcm") ||
+    text.includes("sowt") ||
+    text.includes("twos") ||
+    text.includes("Opus");
+}
+
 function riskyText(value: unknown): boolean {
   const text = JSON.stringify(value).toLowerCase();
   return [
@@ -74,7 +98,7 @@ async function alreadyStored(supabase: any, sourceId: number, sourceVideoId: str
     .eq("source_video_id", sourceVideoId)
     .maybeSingle();
   if (row.error) throw new Error(`Existing-video lookup failed: ${row.error.message}`);
-  return Boolean(row.data && ["downloaded", "uploaded"].includes(row.data.status));
+  return Boolean(row.data);
 }
 
 async function probe(url: string): Promise<{ok:boolean, bytes:number, contentType:string}> {
@@ -337,6 +361,34 @@ async function storeAndUpload(candidate: Candidate, req:Request, botKey:string, 
   const body = await videoRes.arrayBuffer();
   if (body.byteLength > MAX_BYTES) throw new Error(`Downloaded file exceeds ingest limit: ${body.byteLength} bytes`);
 
+  const responseContentType = videoRes.headers.get("content-type")?.split(";")[0] || candidate.contentType || "";
+  if (!hasOriginalAudioTrack(body, responseContentType, candidate.downloadUrl)) {
+    const skipped = await supabase
+      .from("videos")
+      .upsert({
+        source_id: candidate.sourceId,
+        source_video_id: candidate.sourceVideoId,
+        source_url: candidate.sourceUrl,
+        title: candidate.title,
+        status: "skipped_no_audio",
+        storage_path: null,
+        rights_verified: true,
+        rights_basis: candidate.rightsBasis,
+        download_url: candidate.downloadUrl
+      }, { onConflict:"source_id,source_video_id" })
+      .select("id,source_id,source_video_id,title,status,rights_verified,download_url")
+      .single();
+    if (skipped.error) throw new Error(`No-audio skip save failed: ${skipped.error.message}`);
+    return {
+      skipped_no_audio: true,
+      source_id: candidate.sourceId,
+      title: candidate.title,
+      source_url: candidate.sourceUrl,
+      bytes: body.byteLength,
+      database: skipped.data
+    };
+  }
+
   let ext = ".mp4";
   const path = new URL(candidate.downloadUrl).pathname.toLowerCase();
   if (path.endsWith(".mov")) ext = ".mov";
@@ -344,7 +396,7 @@ async function storeAndUpload(candidate: Candidate, req:Request, botKey:string, 
   const original = new URL(candidate.downloadUrl).pathname.split("/").pop() || `video${ext}`;
   const filename = safeFilename(original.includes(".") ? original : original + ext);
   const storagePath = `source-${candidate.sourceId}/${safeFilename(candidate.sourceVideoId)}/${filename}`;
-  const contentType = candidate.contentType || videoRes.headers.get("content-type")?.split(";")[0] || (ext === ".mov" ? "video/quicktime" : "video/mp4");
+  const contentType = responseContentType || (ext === ".mov" ? "video/quicktime" : "video/mp4");
 
   const storage = await supabase.storage
     .from("video-ingest")
@@ -413,12 +465,46 @@ Deno.serve(async (req: Request) => {
     }
     const requested = Number(body?.source_id || 0);
     const sourceId = requested || await pickSource(supabase);
-    const candidate = await discover(sourceId, supabase);
-    if (!candidate) {
-      return Response.json({ok:false,stage:"discover",source_id:sourceId,error:"No new rights-safe downloadable video found"},{status:404});
+    const skippedNoAudio: any[] = [];
+
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const candidate = await discover(sourceId, supabase);
+      if (!candidate) {
+        return Response.json({
+          ok:false,
+          stage:"discover",
+          source_id:sourceId,
+          error:"No new rights-safe downloadable video with original audio found",
+          skipped_no_audio: skippedNoAudio
+        },{status:404});
+      }
+
+      const result: any = await storeAndUpload(candidate, req, botKey, supabase);
+      if (result?.skipped_no_audio) {
+        skippedNoAudio.push({
+          title: result.title,
+          source_url: result.source_url,
+          bytes: result.bytes
+        });
+        continue;
+      }
+
+      return Response.json({
+        ok:true,
+        stage:"downloaded_with_original_audio_and_upload_triggered",
+        original_audio_verified:true,
+        skipped_no_audio: skippedNoAudio,
+        ...result
+      });
     }
-    const result = await storeAndUpload(candidate, req, botKey, supabase);
-    return Response.json({ok:true,stage:"downloaded_and_upload_triggered",...result});
+
+    return Response.json({
+      ok:false,
+      stage:"audio_filter",
+      source_id:sourceId,
+      error:"Checked 6 candidates but none contained an original audio track",
+      skipped_no_audio: skippedNoAudio
+    },{status:404});
   } catch (error) {
     return Response.json({ok:false,error:error instanceof Error ? error.message : String(error)},{status:500});
   }
