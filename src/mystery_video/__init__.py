@@ -1,1 +1,1 @@
-__all__ = ["collector", "rights", "db"]
+__all__ = ["collector", "rights", "db", "oauth_server"]
