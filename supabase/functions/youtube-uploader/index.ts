@@ -120,7 +120,7 @@ Deno.serve(async (req: Request) => {
           categoryId: "28"
         },
         status: {
-          privacyStatus: "private",
+          privacyStatus: "public",
           selfDeclaredMadeForKids: false
         }
       })
@@ -176,7 +176,7 @@ Deno.serve(async (req: Request) => {
       stage: "uploaded",
       channel_id: connection.data.channel_id,
       channel_title: connection.data.channel_title,
-      privacy_status: "private",
+      privacy_status: "public",
       youtube_video_id: uploaded.id,
       video: update.data
     });
