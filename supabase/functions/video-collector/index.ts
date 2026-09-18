@@ -268,7 +268,8 @@ async function collectNasaImages(supabase: any): Promise<Candidate | null> {
       let assets: any;
       try { assets = await getJson(item.href); } catch { continue; }
       const urls = (Array.isArray(assets) ? assets : [])
-        .filter((u:any) => typeof u === "string" && u.startsWith("https://images-assets.nasa.gov/") && /\.mp4(\?|$)/i.test(u));
+        .filter((u:any) => typeof u === "string" && /^https?:\/\/images-assets\.nasa\.gov\//i.test(u) && /\.mp4(\?|$)/i.test(u))
+        .map((u:string) => u.replace(/^http:\/\//i, "https://"));
       const chosen = await chooseUrl(urls);
       if (!chosen) continue;
       return {
