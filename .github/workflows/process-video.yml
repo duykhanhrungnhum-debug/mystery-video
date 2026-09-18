@@ -61,7 +61,7 @@ jobs:
               if [ -n "$token" ]; then
                 err="processor workflow failed with exit code $rc"
                 if [ -f metadata.json ]; then
-                  err="$(python -c 'import json; d=json.load(open("metadata.json")); print(d.get("error") or d.get("status") or "processing failed")' 2>/dev/null || echo "$err")"
+                  err="$(python -c 'import json; d=json.load(open("metadata.json")); print(d.get("error") or ("post-processing/upload failed after processor status=" + str(d.get("status","unknown"))))' 2>/dev/null || echo "$err")"
                 fi
                 jq -n --argjson video_id "$VIDEO_ID" --arg code "$FAIL_CODE" --arg error "$err"                   '{video_id:$video_id,code:$code,error:$error}' > fail.json
                 curl -sS -X POST "$PROCESSOR_API/fail"                   -H "Authorization: Bearer $token"                   -H "content-type: application/json"                   --data-binary @fail.json || true
