@@ -92,6 +92,15 @@ Deno.serve(async (req: Request) => {
 
       if (hasRestrictedAudio(page)) continue;
 
+      const existing = await supabase
+        .from("videos")
+        .select("id,status")
+        .eq("source_id", 1)
+        .eq("source_video_id", String(id))
+        .maybeSingle();
+      if (existing.error) throw new Error(`Existing video lookup failed: ${existing.error.message}`);
+      if (existing.data && ["downloaded", "uploaded"].includes(existing.data.status)) continue;
+
       const movies = collectMovies(page)
         .filter((m) => typeof m.url === "string" && m.url!.toLowerCase().endsWith(".mp4"))
         .filter((m) => !m.width || m.width <= 1920);
@@ -166,6 +175,25 @@ Deno.serve(async (req: Request) => {
 
     if (db.error) throw new Error(`Database upsert failed: ${db.error.message}`);
 
+    let uploadTrigger: unknown = null;
+    try {
+      const uploaderUrl = new URL("/functions/v1/youtube-uploader", req.url).toString();
+      const uploaderRes = await fetch(uploaderUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-bot-key": botKey
+        },
+        body: JSON.stringify({ video_id: db.data.id })
+      });
+      uploadTrigger = {
+        status: uploaderRes.status,
+        result: await uploaderRes.json().catch(() => null)
+      };
+    } catch (error) {
+      uploadTrigger = { status: "trigger_failed", error: String(error) };
+    }
+
     return Response.json({
       ok: true,
       stage: "downloaded",
@@ -176,7 +204,8 @@ Deno.serve(async (req: Request) => {
       bytes: body.byteLength,
       storage_path: storagePath,
       rights_verified: true,
-      database: db.data
+      database: db.data,
+      upload_trigger: uploadTrigger
     });
   } catch (error) {
     return Response.json(
