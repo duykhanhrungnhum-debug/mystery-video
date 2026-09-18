@@ -8,7 +8,7 @@ import textwrap
 from pathlib import Path
 
 from faster_whisper import WhisperModel
-from transformers import pipeline
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 
 def ts(seconds: float) -> str:
@@ -31,14 +31,38 @@ def has_audio(path: str) -> bool:
     return bool(result.stdout.strip())
 
 
+def build_translator():
+    model_name = os.environ.get("TRANSLATION_MODEL", "facebook/nllb-200-distilled-600M")
+    tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang="eng_Latn")
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+    return tokenizer, model
+
+
 def translate_batch(translator, texts):
+    tokenizer, model = translator
     output = []
     batch_size = 8
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        rows = translator(batch, max_length=512)
-        output.extend([r["translation_text"].strip() for r in rows])
+        encoded = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        generated = model.generate(
+            **encoded,
+            forced_bos_token_id=tokenizer.convert_tokens_to_ids("vie_Latn"),
+            max_length=512,
+            num_beams=4,
+        )
+        output.extend([x.strip() for x in tokenizer.batch_decode(generated, skip_special_tokens=True)])
     return output
+
+
+def safe_title(original: str, translated: str) -> str:
+    vi_marks = set("ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ")
+    t = translated.strip()
+    if len(t) < max(8, int(len(original) * 0.45)):
+        return original + " | Phụ đề tiếng Việt"
+    if len(original) >= 12 and not any(ch.lower() in vi_marks for ch in t):
+        return original + " | Phụ đề tiếng Việt"
+    return t
 
 
 def main():
@@ -86,14 +110,9 @@ def main():
             Path(args.metadata).write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
             return 4
 
-        translator = pipeline(
-            "translation",
-            model=os.environ.get("TRANSLATION_MODEL", "Helsinki-NLP/opus-mt-en-vi"),
-            device=-1,
-        )
-
+        translator = build_translator()
         vi_texts = translate_batch(translator, texts)
-        translated_title = translate_batch(translator, [args.title])[0]
+        translated_title = safe_title(args.title, translate_batch(translator, [args.title])[0])
 
         srt_lines = []
         j = 0
