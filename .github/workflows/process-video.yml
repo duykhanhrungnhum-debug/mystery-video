@@ -114,7 +114,7 @@ jobs:
 
           curl -fsS -X PUT "$PROCESSED_URL"             -H "content-type: video/mp4"             -H "cache-control: max-age=3600"             --data-binary @processed.mp4
 
-          curl -fsS -X PUT "$SUBTITLE_URL"             -H "content-type: application/x-subrip; charset=utf-8"             -H "cache-control: max-age=3600"             --data-binary @vi.srt
+          curl -fsS -X PUT "$SUBTITLE_URL"             -H "content-type: text/plain"             -H "cache-control: max-age=3600"             --data-binary @vi.srt
 
           TRANSLATED_TITLE="$(jq -r '.translated_title' metadata.json)"
           DETECTED_LANGUAGE="$(jq -r '.detected_language' metadata.json)"
