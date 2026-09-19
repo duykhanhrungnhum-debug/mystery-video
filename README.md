@@ -51,3 +51,28 @@ python -m pytest -q
 ```
 
 The YouTube OAuth upload step is intentionally not wired yet. It will be added after the collector and rights gate are verified.
+
+
+## Ordered public-domain story pipeline
+
+The channel is transitioning from science-footage reuse toward Vietnamese story videos built from rights-cleared source texts.
+
+Current story ingestion rules:
+
+- A series is collected strictly from episode/chapter 1 upward.
+- The database records the last collected episode and the next expected episode.
+- Once the backlog is caught up, the collector probes only for the next episode and continues sequentially.
+- Missing expected episodes stop the series instead of silently skipping ahead.
+- Public-domain source text is treated as raw material; generated narration/video is a separate production stage.
+
+Current verified source-text families include Chinese Wikisource editions of Journey to the West, Romance of the Three Kingdoms, Water Margin, Investiture of the Gods, and Strange Tales from a Chinese Studio.
+
+Story processing is intentionally split into stages. The first processor creates a Vietnamese narration script, a Vietnamese voice track, scene prompts, and a private placeholder preview. Placeholder previews are never eligible for automatic YouTube publication. A later visual-generation stage must replace the placeholder with approved AI-generated visuals before an episode can become publish-ready.
+
+Commercial-use guardrails for the current local models:
+
+- Translation: `Helsinki-NLP/opus-mt-zh-vi` (Apache-2.0).
+- Narration rewrite: `Qwen/Qwen2.5-0.5B-Instruct` (Apache-2.0).
+- Vietnamese TTS proof pipeline: Piper `vi_VN-vais1000-medium`; retain the model/dataset attribution required by its model card.
+
+The older NLLB processor remains only for the earlier science-video experiment. It is not used by the new story pipeline because the NLLB model is CC-BY-NC and therefore is not selected for a monetization-oriented production path.
