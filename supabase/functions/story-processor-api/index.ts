@@ -30,7 +30,11 @@ async function verifyGitHub(req:Request) {
   if(payload.ref!=="refs/heads/main") throw new Error("wrong_ref");
   if(!["schedule","workflow_dispatch","push"].includes(String(payload.event_name||""))) throw new Error("wrong_event");
   const workflowRef=String(payload.job_workflow_ref||"");
-  if(workflowRef && !workflowRef.startsWith(REPO+"/.github/workflows/process-story.yml@")) throw new Error("wrong_workflow");
+  const allowedWorkflows=[
+    REPO+"/.github/workflows/process-story.yml@",
+    REPO+"/.github/workflows/process-story-visuals.yml@"
+  ];
+  if(workflowRef && !allowedWorkflows.some((prefix)=>workflowRef.startsWith(prefix))) throw new Error("wrong_workflow");
 }
 
 function clip(value:unknown,max:number):string {
