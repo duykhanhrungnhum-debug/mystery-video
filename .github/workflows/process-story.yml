@@ -106,10 +106,11 @@ jobs:
           mark_failed() {
             local episode_id="$1"
             local message="$2"
+            local repair_signature="$3"
             local token
             token="$(get_oidc || true)"
             if [ -n "$token" ]; then
-              jq -n --argjson episode_id "$episode_id" --arg error "$message"                 '{episode_id:$episode_id,error:$error}' > diagnostics/fail.json
+              jq -n --argjson episode_id "$episode_id" --arg error "$message" --arg repair_signature "$repair_signature"                 '{episode_id:$episode_id,error:$error,repair_signature:$repair_signature}' > diagnostics/fail.json
               curl -sS -X POST "$STORY_PROCESSOR_API/fail"                 -H "Authorization: Bearer $token"                 -H "content-type: application/json"                 --data-binary @diagnostics/fail.json || true
             fi
           }
@@ -152,17 +153,17 @@ jobs:
 
             if [ "$processor_rc" -ne 0 ]; then
               err="$(python -c 'import json; d=json.load(open("story_metadata.json")); print(d.get("error") or "story processor failed")' 2>/dev/null || echo "story processor failed")"
-              mark_failed "$EPISODE_ID" "$err"
+              mark_failed "$EPISODE_ID" "$err" "processor-generation-v1"
               exit "$processor_rc"
             fi
 
             if ! curl --fail-with-body -sS -X PUT "$NARRATION_URL"               -H "content-type: audio/wav"               -H "cache-control: max-age=3600"               -H "x-upsert: true"               --data-binary @narration_vi.wav; then
-              mark_failed "$EPISODE_ID" "narration upload failed"
+              mark_failed "$EPISODE_ID" "narration upload failed" "signed-upload-v2-x-upsert"
               exit 1
             fi
 
             if ! curl --fail-with-body -sS -X PUT "$PREVIEW_URL"               -H "content-type: video/mp4"               -H "cache-control: max-age=3600"               -H "x-upsert: true"               --data-binary @story_preview.mp4; then
-              mark_failed "$EPISODE_ID" "preview upload failed"
+              mark_failed "$EPISODE_ID" "preview upload failed" "signed-upload-v2-x-upsert"
               exit 1
             fi
 
@@ -181,7 +182,7 @@ jobs:
               }' > story_complete.json
 
             if ! curl -fsS -X POST "$STORY_PROCESSOR_API/complete"               -H "Authorization: Bearer $token"               -H "content-type: application/json"               --data-binary @story_complete.json > story_complete_response.json; then
-              mark_failed "$EPISODE_ID" "complete callback failed"
+              mark_failed "$EPISODE_ID" "complete callback failed" "complete-callback-v1"
               exit 1
             fi
 
