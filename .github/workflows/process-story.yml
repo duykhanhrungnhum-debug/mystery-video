@@ -156,12 +156,12 @@ jobs:
               exit "$processor_rc"
             fi
 
-            if ! curl -fsS -X PUT "$NARRATION_URL"               -H "content-type: audio/wav"               -H "cache-control: max-age=3600"               --data-binary @narration_vi.wav; then
+            if ! curl --fail-with-body -sS -X PUT "$NARRATION_URL"               -H "content-type: audio/wav"               -H "cache-control: max-age=3600"               -H "x-upsert: true"               --data-binary @narration_vi.wav; then
               mark_failed "$EPISODE_ID" "narration upload failed"
               exit 1
             fi
 
-            if ! curl -fsS -X PUT "$PREVIEW_URL"               -H "content-type: video/mp4"               -H "cache-control: max-age=3600"               --data-binary @story_preview.mp4; then
+            if ! curl --fail-with-body -sS -X PUT "$PREVIEW_URL"               -H "content-type: video/mp4"               -H "cache-control: max-age=3600"               -H "x-upsert: true"               --data-binary @story_preview.mp4; then
               mark_failed "$EPISODE_ID" "preview upload failed"
               exit 1
             fi
