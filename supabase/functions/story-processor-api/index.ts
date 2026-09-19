@@ -294,24 +294,42 @@ Deno.serve(async(req:Request)=>{
       const id=Number(body?.episode_id);
       if(!Number.isFinite(id)) return Response.json({ok:false,error:"invalid_episode_id"},{status:400});
       const errorText=String(body?.error||"story_processing_failed").slice(0,2000);
+      const repairSignature=clip(body?.repair_signature||"unspecified",240).trim()||"unspecified";
       const current=await supabase.from("story_episodes")
-        .select("id,processing_status,processing_attempts,processing_error")
+        .select("id,processing_status,processing_attempts,processing_error,processing_last_repair_signature,processing_failure_history")
         .eq("id",id).single();
       if(current.error) throw new Error("episode_lookup_failed: "+current.error.message);
-      const repeated=Boolean(current.data.processing_error && current.data.processing_error===errorText);
+
+      const sameError=Boolean(current.data.processing_error && current.data.processing_error===errorText);
+      const sameRepair=Boolean(current.data.processing_last_repair_signature && current.data.processing_last_repair_signature===repairSignature);
+      const repeated=sameError && sameRepair;
       const exhausted=Number(current.data.processing_attempts||0)>=3;
       const blocked=repeated||exhausted;
+      const history=Array.isArray(current.data.processing_failure_history)
+        ? current.data.processing_failure_history.slice(-19)
+        : [];
+      history.push({
+        at:new Date().toISOString(),
+        error:errorText,
+        repair_signature:repairSignature,
+        repeated_same_error_and_repair:repeated,
+        outcome:blocked?"blocked":"retry_allowed"
+      });
+
       const updated=await supabase.from("story_episodes").update({
         processing_status:blocked?"blocked":"failed",
-        processing_error:errorText
+        processing_error:errorText,
+        processing_last_repair_signature:repairSignature,
+        processing_failure_history:history
       }).eq("id",id)
-        .select("id,series_id,episode_no,status,processing_status,processing_attempts,processing_error")
+        .select("id,series_id,episode_no,status,processing_status,processing_attempts,processing_error,processing_last_repair_signature,processing_failure_history")
         .single();
       if(updated.error) throw new Error("fail_update_failed: "+updated.error.message);
       return Response.json({
         ok:true,
         stage:blocked?"processing_blocked":"failure_recorded",
-        repeated_error:repeated,
+        repeated_same_error_and_repair:repeated,
+        exhausted_attempts:exhausted,
         max_processing_attempts:3,
         episode:updated.data
       });
