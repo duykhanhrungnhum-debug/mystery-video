@@ -72,7 +72,6 @@ Deno.serve(async(req:Request)=>{
 
       const claimed=await supabase.from("story_episodes").update({
         processing_status:"processing",
-        processing_error:null,
         processing_claimed_at:new Date().toISOString(),
         processing_attempts:Number(candidate.processing_attempts||0)+1
       }).eq("id",candidate.id)
@@ -294,14 +293,28 @@ Deno.serve(async(req:Request)=>{
     if(path.endsWith("/fail")){
       const id=Number(body?.episode_id);
       if(!Number.isFinite(id)) return Response.json({ok:false,error:"invalid_episode_id"},{status:400});
+      const errorText=String(body?.error||"story_processing_failed").slice(0,2000);
+      const current=await supabase.from("story_episodes")
+        .select("id,processing_status,processing_attempts,processing_error")
+        .eq("id",id).single();
+      if(current.error) throw new Error("episode_lookup_failed: "+current.error.message);
+      const repeated=Boolean(current.data.processing_error && current.data.processing_error===errorText);
+      const exhausted=Number(current.data.processing_attempts||0)>=3;
+      const blocked=repeated||exhausted;
       const updated=await supabase.from("story_episodes").update({
-        processing_status:"failed",
-        processing_error:String(body?.error||"story_processing_failed").slice(0,2000)
+        processing_status:blocked?"blocked":"failed",
+        processing_error:errorText
       }).eq("id",id)
         .select("id,series_id,episode_no,status,processing_status,processing_attempts,processing_error")
         .single();
       if(updated.error) throw new Error("fail_update_failed: "+updated.error.message);
-      return Response.json({ok:true,stage:"failure_recorded",episode:updated.data});
+      return Response.json({
+        ok:true,
+        stage:blocked?"processing_blocked":"failure_recorded",
+        repeated_error:repeated,
+        max_processing_attempts:3,
+        episode:updated.data
+      });
     }
 
     return Response.json({ok:false,error:"unknown_route"},{status:404});
