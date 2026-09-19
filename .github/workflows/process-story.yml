@@ -41,7 +41,7 @@ jobs:
       STORY_REWRITE_MODEL: Qwen/Qwen2.5-0.5B-Instruct
       STORY_TTS_VOICE: vi_VN-vais1000-medium
       STORY_SOURCE_KEY: ${{ matrix.source_key }}
-      STORY_EPISODES_PER_RUN: "2"
+      STORY_EPISODES_PER_RUN: "1"
       HF_HOME: ${{ github.workspace }}/.story-cache/huggingface
 
     steps:
