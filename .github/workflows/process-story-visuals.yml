@@ -54,6 +54,10 @@ jobs:
         shell: bash
         run: |
           set -e
+          if [ -z "$STORY_IMAGE_API_URL" ] || [ -z "$STORY_IMAGE_MODEL" ] || [ -z "$STORY_IMAGE_API_KEY" ] || [ "$STORY_IMAGE_RIGHTS_CONFIRMED" != "true" ]; then
+            echo "Visual provider is not ready; skip Pillow/FFmpeg installation."
+            exit 0
+          fi
           python -m pip install --upgrade pip
           pip install "pillow>=10,<12"
           command -v ffmpeg >/dev/null 2>&1 || {
