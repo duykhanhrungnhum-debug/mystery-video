@@ -18,6 +18,10 @@ TRANSLATION_MODEL = os.environ.get("STORY_TRANSLATION_MODEL", "Helsinki-NLP/opus
 REWRITE_MODEL = os.environ.get("STORY_REWRITE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
 TTS_VOICE = os.environ.get("STORY_TTS_VOICE", "vi_VN-vais1000-medium")
 
+# GitHub hosted runners have a small fixed CPU pool. Keeping torch inside that
+# pool avoids thread oversubscription and makes runtime more predictable.
+torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
+
 
 def run(cmd, *, input_text=None):
     return subprocess.run(
@@ -67,7 +71,7 @@ def translate_chunks(chunks):
     model = AutoModelForSeq2SeqLM.from_pretrained(TRANSLATION_MODEL)
     model.eval()
     out = []
-    batch_size = 4
+    batch_size = 8
     with torch.inference_mode():
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
@@ -92,7 +96,7 @@ def translate_chunks(chunks):
     return out
 
 
-def group_text(parts, max_chars=1700):
+def group_text(parts, max_chars=2200):
     groups, buf = [], ""
     for p in parts:
         p = p.strip()
@@ -145,7 +149,7 @@ def rewrite_narration(parts):
         with torch.inference_mode():
             output = model.generate(
                 **inputs,
-                max_new_tokens=900,
+                max_new_tokens=720,
                 do_sample=False,
                 repetition_penalty=1.06,
                 eos_token_id=tokenizer.eos_token_id,
