@@ -11,7 +11,6 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from PIL import Image
 
 API = os.environ.get("STORY_PROCESSOR_API", "").rstrip("/")
 SOURCE_KEY = os.environ.get("STORY_SOURCE_KEY", "").strip()
@@ -92,6 +91,7 @@ def generate_image(prompt):
     raise RuntimeError("image_provider_returned_no_image")
 
 def normalize_image(blob, out_path):
+    from PIL import Image
     raw_path = out_path.with_suffix(".raw")
     raw_path.write_bytes(blob)
     try:
