@@ -1,0 +1,68 @@
+name: Hidden Beyond Story Visual Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/process-story-visuals.yml"
+      - "scripts/process_story_visuals.py"
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  visual:
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        source_key:
+          - journey_to_the_west
+          - romance_three_kingdoms
+          - water_margin_120
+          - investiture_gods
+          - strange_tales
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    concurrency:
+      group: hidden-beyond-story-visual-${{ matrix.source_key }}
+      cancel-in-progress: false
+
+    env:
+      STORY_PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/story-processor-api
+      STORY_SOURCE_KEY: ${{ matrix.source_key }}
+      STORY_IMAGE_API_URL: ${{ vars.STORY_IMAGE_API_URL }}
+      STORY_IMAGE_MODEL: ${{ vars.STORY_IMAGE_MODEL }}
+      STORY_IMAGE_SIZE: ${{ vars.STORY_IMAGE_SIZE }}
+      STORY_IMAGE_RIGHTS_CONFIRMED: ${{ vars.STORY_IMAGE_RIGHTS_CONFIRMED }}
+      STORY_IMAGE_API_KEY: ${{ secrets.STORY_IMAGE_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install visual worker dependencies
+        shell: bash
+        run: |
+          set -e
+          python -m pip install --upgrade pip
+          pip install "pillow>=10,<12"
+          command -v ffmpeg >/dev/null 2>&1 || {
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          }
+
+      - name: Process one eligible visual episode
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/process_story_visuals.py
