@@ -1,8 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-const API = "https://zh.wikisource.org/w/api.php";
-const UA = "Hidden-Beyond-Story-Collector/1.0";
+const UA = "Hidden-Beyond-Story-Collector/1.1 (https://github.com/duykhanhrungnhum-debug/mystery-video)";
 
 function adminKey(): string {
   const modern = Deno.env.get("SUPABASE_SECRET_KEYS");
@@ -53,33 +52,52 @@ function htmlToText(html:string): string {
     .trim();
 }
 
-async function api(params:Record<string,string>): Promise<any> {
-  const u = new URL(API);
-  for (const [k,v] of Object.entries({format:"json",formatversion:"2",origin:"*",...params})) {
-    u.searchParams.set(k,v);
+
+async function sleep(ms:number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchRendered(title:string): Promise<{html:string,url:string} | null> {
+  const u = new URL("https://zh.wikisource.org/w/index.php");
+  u.searchParams.set("title", title);
+  u.searchParams.set("action", "render");
+  u.searchParams.set("uselang", "zh-hant");
+
+  let lastStatus = 0;
+  for (let attempt=0; attempt<4; attempt++) {
+    const res = await fetch(u, {
+      headers:{
+        "User-Agent":UA,
+        "Accept":"text/html,application/xhtml+xml"
+      }
+    });
+    lastStatus = res.status;
+    if (res.status === 404) return null;
+    if (res.status === 429 || res.status >= 500) {
+      await sleep(1000 * Math.pow(2, attempt));
+      continue;
+    }
+    if (!res.ok) throw new Error(`Wikisource HTTP ${res.status} for ${title}`);
+    const html = await res.text();
+    if (/noarticletext|There is currently no text in this page|此頁面目前沒有文字/i.test(html)) return null;
+    return {
+      html,
+      url:`https://zh.wikisource.org/wiki/${encodeURIComponent(title)}`
+    };
   }
-  const res = await fetch(u, {headers:{"User-Agent":UA}});
-  if (!res.ok) throw new Error(`Wikisource API HTTP ${res.status}`);
-  return await res.json();
+  throw new Error(`Wikisource HTTP ${lastStatus} after retries for ${title}`);
 }
 
-async function pageExists(title:string): Promise<boolean> {
-  const j = await api({action:"query",titles:title});
-  const page = j?.query?.pages?.[0];
-  return Boolean(page && !page.missing && Number(page.pageid) > 0);
-}
-
-async function fetchEpisode(title:string): Promise<{title:string,text:string,url:string}> {
-  const j = await api({action:"parse",page:title,prop:"text|displaytitle"});
-  if (j?.error) throw new Error(`Parse failed for ${title}: ${j.error.info || j.error.code}`);
-  const html = String(j?.parse?.text || "");
-  const text = htmlToText(html);
-  if (text.length < 200) throw new Error(`Parsed text too short for ${title}`);
-  const display = htmlToText(String(j?.parse?.displaytitle || title)).split("\n")[0].trim() || title;
+async function fetchEpisode(title:string): Promise<{title:string,text:string,url:string} | null> {
+  const page = await fetchRendered(title);
+  if (!page) return null;
+  const text = htmlToText(page.html);
+  if (text.length < 200) return null;
+  const h = page.html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
   return {
-    title: display,
+    title: h ? htmlToText(h[1]) : title,
     text,
-    url: `https://zh.wikisource.org/wiki/${encodeURIComponent(title)}`
+    url: page.url
   };
 }
 
@@ -111,37 +129,33 @@ Deno.serve(async (req:Request) => {
     const results:any[] = [];
     for (const series of seriesRows.data) {
       let latest = Number(series.latest_known_episode || 0);
-
-      // Monitor sequentially beyond the last known episode. This is how new source updates are detected.
-      for (let i=0;i<10;i++) {
-        const candidate = latest + 1;
-        if (!(await pageExists(episodePage(series,candidate)))) break;
-        latest = candidate;
-      }
-
-      if (latest !== Number(series.latest_known_episode || 0)) {
-        await supabase.from("story_series").update({
-          latest_known_episode: latest,
-          last_checked_at: new Date().toISOString()
-        }).eq("id",series.id);
-      } else {
-        await supabase.from("story_series").update({
-          last_checked_at: new Date().toISOString()
-        }).eq("id",series.id);
-      }
-
       let next = Number(series.next_episode_to_collect || 1);
+
+      // Only probe for new source episodes after the backlog has been collected.
+      // This keeps collection strictly sequential and avoids unnecessary source requests.
+      if (next > latest) {
+        for (let i=0;i<10;i++) {
+          const candidate = latest + 1;
+          const probe = await fetchEpisode(episodePage(series,candidate));
+          if (!probe) break;
+          latest = candidate;
+        }
+      }
+
+      await supabase.from("story_series").update({
+        latest_known_episode: latest,
+        last_checked_at: new Date().toISOString()
+      }).eq("id",series.id);
       let last = Number(series.last_collected_episode || 0);
       const collected:any[] = [];
 
       for (let i=0; i<maxPerSeries && next<=latest; i++) {
         if (next !== last + 1) throw new Error(`Order invariant failed for ${series.source_key}: next=${next}, last=${last}`);
         const pageTitle = episodePage(series,next);
-        if (!(await pageExists(pageTitle))) {
+        const episode = await fetchEpisode(pageTitle);
+        if (!episode) {
           throw new Error(`Missing expected episode ${next} for ${series.source_key}: ${pageTitle}`);
         }
-
-        const episode = await fetchEpisode(pageTitle);
         const inserted = await supabase.from("story_episodes").upsert({
           series_id:series.id,
           episode_no:next,
