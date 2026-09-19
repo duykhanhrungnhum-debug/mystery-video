@@ -45,7 +45,7 @@ Deno.serve(async(req:Request)=>{
         .select("id,series_id,episode_no,title,source_page_title,source_url,source_text,processing_attempts,story_series!inner(title,source_key)")
         .eq("status","collected").is("youtube_video_id",null).lt("processing_attempts",3)
         .or("processing_status.is.null,processing_status.eq.failed")
-        .order("series_id",{ascending:true}).order("episode_no",{ascending:true}).limit(100);
+        .order("id",{ascending:true}).limit(100);
       if(requestedKey) q=q.eq("story_series.source_key",requestedKey);
       const candidates=await q;
       if(candidates.error) throw new Error("queue_lookup_failed: "+candidates.error.message);
