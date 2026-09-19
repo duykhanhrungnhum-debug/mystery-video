@@ -67,11 +67,9 @@ jobs:
           PREVIEW_PATH="$(jq -r '.job.preview.path' repair-claim.json)"
 
           if command -v piper >/dev/null 2>&1; then
-            printf '%s
-' "$(cat story_vi.txt)" | piper               --model voices/vi.onnx               --config voices/vi.onnx.json               --output_file narration_vi.wav
+            cat story_vi.txt | piper               --model voices/vi.onnx               --config voices/vi.onnx.json               --output_file narration_vi.wav
           else
-            printf '%s
-' "$(cat story_vi.txt)" | python -m piper               --model voices/vi.onnx               --config voices/vi.onnx.json               --output_file narration_vi.wav
+            cat story_vi.txt | python -m piper               --model voices/vi.onnx               --config voices/vi.onnx.json               --output_file narration_vi.wav
           fi
 
           test -s narration_vi.wav
