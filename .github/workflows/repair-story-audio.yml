@@ -1,0 +1,92 @@
+name: Hidden Beyond Story Audio Repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/repair-story-audio.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hidden-beyond-story-audio-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      STORY_PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/story-processor-api
+      EPISODE_ID: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install TTS runtime
+        shell: bash
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install "piper-tts>=1.2,<2"
+
+      - name: Prepare Vietnamese voice
+        shell: bash
+        run: |
+          set -e
+          mkdir -p voices
+          curl -fL "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium.onnx" -o voices/vi.onnx
+          curl -fL "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium.onnx.json" -o voices/vi.onnx.json
+
+      - name: Regenerate narration from repaired script
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          get_oidc() {
+            curl -fsS               -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-story-processor"               | python -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+
+          token="$(get_oidc)"
+          jq -n --argjson episode_id "$EPISODE_ID" '{episode_id:$episode_id}' > repair-claim-request.json
+          curl -fsS -X POST "$STORY_PROCESSOR_API/repair-audio-claim"             -H "Authorization: Bearer $token"             -H "content-type: application/json"             --data-binary @repair-claim-request.json > repair-claim.json
+
+          test "$(jq -r '.stage' repair-claim.json)" = "repair_audio_claimed"
+          jq -r '.job.script_vi' repair-claim.json > story_vi.txt
+          NARRATION_URL="$(jq -r '.job.narration.signedUrl' repair-claim.json)"
+          NARRATION_PATH="$(jq -r '.job.narration.path' repair-claim.json)"
+          PREVIEW_URL="$(jq -r '.job.preview.signedUrl' repair-claim.json)"
+          PREVIEW_PATH="$(jq -r '.job.preview.path' repair-claim.json)"
+
+          if command -v piper >/dev/null 2>&1; then
+            printf '%s
+' "$(cat story_vi.txt)" | piper               --model voices/vi.onnx               --config voices/vi.onnx.json               --output_file narration_vi.wav
+          else
+            printf '%s
+' "$(cat story_vi.txt)" | python -m piper               --model voices/vi.onnx               --config voices/vi.onnx.json               --output_file narration_vi.wav
+          fi
+
+          test -s narration_vi.wav
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 narration_vi.wav | grep -q .
+
+          ffmpeg -y -hide_banner -loglevel error             -f lavfi -i "color=c=0x111827:s=1280x720:r=30"             -i narration_vi.wav             -c:v libx264 -preset veryfast -crf 24 -pix_fmt yuv420p             -c:a aac -b:a 160k -shortest -movflags +faststart             story_preview.mp4
+
+          curl --fail-with-body -sS -X PUT "$NARRATION_URL"             -H "content-type: audio/wav"             -H "cache-control: max-age=3600"             -H "x-upsert: true"             --data-binary @narration_vi.wav
+
+          curl --fail-with-body -sS -X PUT "$PREVIEW_URL"             -H "content-type: video/mp4"             -H "cache-control: max-age=3600"             -H "x-upsert: true"             --data-binary @story_preview.mp4
+
+          token="$(get_oidc)"
+          jq -n             --argjson episode_id "$EPISODE_ID"             --arg narration_path "$NARRATION_PATH"             --arg preview_path "$PREVIEW_PATH"             '{episode_id:$episode_id,narration_path:$narration_path,preview_path:$preview_path}'             > repair-complete.json
+
+          curl -fsS -X POST "$STORY_PROCESSOR_API/repair-audio-complete"             -H "Authorization: Bearer $token"             -H "content-type: application/json"             --data-binary @repair-complete.json > repair-complete-response.json
+
+          jq . repair-complete-response.json
+          test "$(jq -r '.stage' repair-complete-response.json)" = "repair_audio_complete"
