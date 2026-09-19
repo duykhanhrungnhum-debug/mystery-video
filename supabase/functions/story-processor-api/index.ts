@@ -112,6 +112,7 @@ Deno.serve(async(req:Request)=>{
       }
       const script=String(body?.script_vi||"").trim();
       if(script.length<200) return Response.json({ok:false,error:"script_too_short"},{status:400});
+      const plan=Array.isArray(body?.visual_plan) ? body.visual_plan.slice(0,24) : [];
       const updated=await supabase.from("story_episodes").update({
         status:"narrated",
         title_vi:String(body?.title_vi||"").slice(0,240)||null,
@@ -119,7 +120,9 @@ Deno.serve(async(req:Request)=>{
         narration_storage_path:expectedNarration,
         preview_storage_path:expectedPreview,
         visual_mode:"placeholder_motion_card",
-        visual_plan:body?.visual_plan||null,
+        visual_plan:plan,
+        visual_status:plan.length ? "pending" : "missing_plan",
+        publish_ready:false,
         translation_model:String(body?.translation_model||"").slice(0,200)||null,
         rewrite_model:String(body?.rewrite_model||"").slice(0,200)||null,
         tts_voice:String(body?.tts_voice||"").slice(0,200)||null,
@@ -128,10 +131,28 @@ Deno.serve(async(req:Request)=>{
         processing_error:null,
         processed_at:new Date().toISOString()
       }).eq("id",id).eq("processing_status","processing")
-        .select("id,series_id,episode_no,title_vi,status,processing_status,narration_storage_path,preview_storage_path,processed_at")
+        .select("id,series_id,episode_no,title_vi,status,processing_status,visual_status,narration_storage_path,preview_storage_path,processed_at")
         .single();
       if(updated.error) throw new Error("complete_failed: "+updated.error.message);
-      return Response.json({ok:true,stage:"narrated",episode:updated.data});
+
+      if(plan.length){
+        const rows=plan.map((scene:any,index:number)=>({
+          episode_id:id,
+          scene_no:Number(scene?.scene||index+1),
+          prompt_vi:String(scene?.prompt_vi||"").slice(0,4000),
+          narration_excerpt_vi:String(scene?.narration_excerpt_vi||"").slice(0,2000)||null,
+          provider:null,
+          image_storage_path:null,
+          status:"pending",
+          error:null,
+          updated_at:new Date().toISOString()
+        })).filter((row:any)=>row.scene_no>0 && row.prompt_vi.length>0);
+        if(rows.length){
+          const assets=await supabase.from("story_visual_assets").upsert(rows,{onConflict:"episode_id,scene_no"});
+          if(assets.error) throw new Error("visual_plan_queue_failed: "+assets.error.message);
+        }
+      }
+      return Response.json({ok:true,stage:"narrated",episode:updated.data,visual_jobs:plan.length});
     }
 
     if(path.endsWith("/fail")){
