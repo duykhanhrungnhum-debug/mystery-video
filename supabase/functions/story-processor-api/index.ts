@@ -32,7 +32,9 @@ async function verifyGitHub(req:Request) {
   const workflowRef=String(payload.job_workflow_ref||"");
   const allowedWorkflows=[
     REPO+"/.github/workflows/process-story.yml@",
-    REPO+"/.github/workflows/process-story-visuals.yml@"
+    REPO+"/.github/workflows/process-story-visuals.yml@",
+    REPO+"/.github/workflows/repair-story-audio.yml@",
+    REPO+"/.github/workflows/import-story-visuals.yml@"
   ];
   if(workflowRef && !allowedWorkflows.some((prefix)=>workflowRef.startsWith(prefix))) throw new Error("wrong_workflow");
 }
@@ -205,6 +207,94 @@ Deno.serve(async(req:Request)=>{
         .single();
       if(updated.error) throw new Error("finalize_update_failed: "+updated.error.message);
       return Response.json({ok:true,stage:"video_ready",episode:updated.data});
+    }
+
+    if(path.endsWith("/repair-audio-claim")){
+      const id=Number(body?.episode_id);
+      if(!Number.isFinite(id)) return Response.json({ok:false,error:"invalid_episode_id"},{status:400});
+      const episode=await supabase.from("story_episodes")
+        .select("id,series_id,episode_no,title_vi,script_vi,story_series!inner(title,source_key)")
+        .eq("id",id).single();
+      if(episode.error) throw new Error("episode_lookup_failed: "+episode.error.message);
+      const script=String(episode.data.script_vi||"").trim();
+      if(script.length<500) return Response.json({ok:false,error:"repair_script_too_short"},{status:409});
+
+      const base=`stories/${episode.data.series_id}/${String(episode.data.episode_no).padStart(4,"0")}`;
+      const narrationPath=`${base}/narration_vi.wav`;
+      const previewPath=`${base}/preview.mp4`;
+      const narration=await supabase.storage.from("video-ingest").createSignedUploadUrl(narrationPath,{upsert:true});
+      const preview=await supabase.storage.from("video-ingest").createSignedUploadUrl(previewPath,{upsert:true});
+      if(narration.error||preview.error||!narration.data||!preview.data) throw new Error("repair_storage_signing_failed");
+      return Response.json({ok:true,stage:"repair_audio_claimed",job:{
+        episode_id:episode.data.id,
+        series_id:episode.data.series_id,
+        series_title:(episode.data.story_series as any).title,
+        source_key:(episode.data.story_series as any).source_key,
+        episode_no:episode.data.episode_no,
+        title_vi:episode.data.title_vi,
+        script_vi:script,
+        narration:{path:narrationPath,signedUrl:narration.data.signedUrl},
+        preview:{path:previewPath,signedUrl:preview.data.signedUrl}
+      }});
+    }
+
+    if(path.endsWith("/repair-audio-complete")){
+      const id=Number(body?.episode_id);
+      if(!Number.isFinite(id)) return Response.json({ok:false,error:"invalid_episode_id"},{status:400});
+      const episode=await supabase.from("story_episodes")
+        .select("id,series_id,episode_no,script_vi")
+        .eq("id",id).single();
+      if(episode.error) throw new Error("episode_lookup_failed: "+episode.error.message);
+      const base=`stories/${episode.data.series_id}/${String(episode.data.episode_no).padStart(4,"0")}`;
+      const expectedNarration=`${base}/narration_vi.wav`;
+      const expectedPreview=`${base}/preview.mp4`;
+      if(body?.narration_path!==expectedNarration||body?.preview_path!==expectedPreview){
+        return Response.json({ok:false,error:"invalid_repair_storage_path"},{status:400});
+      }
+
+      const listed=await supabase.storage.from("video-ingest").list(base,{limit:100});
+      if(listed.error) throw new Error("repair_storage_list_failed: "+listed.error.message);
+      const names=new Set((listed.data||[]).map((x:any)=>x.name));
+      if(!names.has("narration_vi.wav")||!names.has("preview.mp4")){
+        return Response.json({ok:false,error:"repair_audio_files_missing"},{status:409});
+      }
+
+      const updated=await supabase.from("story_episodes").update({
+        status:"narrated",
+        processing_status:"complete",
+        processing_error:null,
+        narration_storage_path:expectedNarration,
+        preview_storage_path:expectedPreview,
+        visual_status:"pending",
+        visual_attempts:0,
+        visual_error:null,
+        visual_last_repair_signature:null,
+        visual_failure_history:[],
+        verification_status:"pending",
+        verification_attempts:0,
+        repair_attempts:0,
+        last_verification_error:null,
+        last_repair_signature:null,
+        repair_history:[],
+        verified_at:null,
+        publish_ready:false,
+        final_video_storage_path:null,
+        tts_voice:"vi_VN-vais1000-medium",
+        generation_notes:"content-repair-v2 + repaired Piper narration"
+      }).eq("id",id)
+        .select("id,series_id,episode_no,status,processing_status,visual_status,verification_status,publish_ready,narration_storage_path,preview_storage_path")
+        .single();
+      if(updated.error) throw new Error("repair_audio_update_failed: "+updated.error.message);
+
+      await supabase.from("story_visual_assets").update({
+        status:"pending",
+        provider:null,
+        image_storage_path:null,
+        error:null,
+        updated_at:new Date().toISOString()
+      }).eq("episode_id",id);
+
+      return Response.json({ok:true,stage:"repair_audio_complete",episode:updated.data});
     }
 
     if(path.endsWith("/visual-claim")){
