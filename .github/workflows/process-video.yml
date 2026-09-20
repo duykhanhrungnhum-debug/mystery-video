@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/process-video.yml"
+      - ".github/process-video.trigger"
   schedule:
     - cron: "17,47 * * * *"
   workflow_dispatch:
