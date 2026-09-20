@@ -1,1 +1,1 @@
-trigger=2026-09-20-sample-v4-dialogue-timing-sfx
+trigger=2026-09-20-sample-v4-final-upload-2
