@@ -1,0 +1,42 @@
+name: Hidden Beyond YouTube Upload
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/upload-youtube.trigger"
+  schedule:
+    - cron: "27,57 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hidden-beyond-youtube-upload
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UPLOADER_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/youtube-uploader
+    steps:
+      - name: Upload next processed video
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-youtube-upload" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          curl -fsSL -X POST "$UPLOADER_API" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" -d '{}' > upload.json
+          cat upload.json
+          stage="$(python -c 'import json; print(json.load(open("upload.json")).get("stage",""))')"
+          if [ "$stage" = "uploaded" ]; then
+            echo "YOUTUBE_UPLOAD_OK"
+          elif [ "$stage" = "idle" ]; then
+            echo "::notice title=Upload queue idle::No processed video is waiting; this run is complete."
+          else
+            echo "Unexpected uploader stage: $stage"
+            exit 1
+          fi
