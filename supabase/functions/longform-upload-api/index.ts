@@ -165,6 +165,21 @@ Deno.serve(async(req:Request)=>{
     if(iq.data.rights_status!=="approved") throw new Error("source_item_not_approved");
     if(Number(iq.data.source_id)!==Number(series.source_id)) throw new Error("series_source_mismatch");
 
+    if(url.pathname.endsWith("/prepare")){
+      const existing=await db.from("videos")
+        .select("id,status,youtube_video_id")
+        .eq("source_id",series.source_id)
+        .eq("source_video_id",sourceVideoId)
+        .maybeSingle();
+      if(existing.error) throw new Error("existing_video_lookup_failed:"+existing.error.message);
+      if(existing.data?.youtube_video_id){
+        return Response.json({ok:true,stage:"already_uploaded",video:existing.data});
+      }
+      if(existing.data?.status==="uploading_external"){
+        return Response.json({ok:false,stage:"upload_in_progress",video:existing.data},{status:409});
+      }
+    }
+
     const yt=await accessToken(db);
     const playlistId=await ensurePlaylist(db,yt.token,series);
 
