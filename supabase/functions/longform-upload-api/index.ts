@@ -137,17 +137,79 @@ async function start(req:Request,db:any,body:any){
   if(!ir.ok)throw new Error("youtube_resumable_init_failed:"+ir.status+":"+await ir.text());
   const uploadUrl=ir.headers.get("location"); if(!uploadUrl)throw new Error("youtube_upload_url_missing");
   const id=crypto.randomUUID(), token=randomToken(), tokenHash=await sha256Hex(token), now=new Date(), exp=new Date(now.getTime()+3*3600*1000);
+  const root=`longform/${id}`;
+  const inputAudioPath=`${root}/source-audio.mp3`;
+  const voiceAudioPath=`${root}/voice.mp3`;
+  const subtitlePath=`${root}/vi.srt`;
+  const metadataPath=`${root}/metadata.json`;
+  const inputUpload=await db.storage.from("video-ingest").createSignedUploadUrl(inputAudioPath,{upsert:true});
+  if(inputUpload.error||!inputUpload.data?.signedUrl)throw new Error("input_audio_signing_failed:"+(inputUpload.error?.message||"missing_url"));
   const ins=await db.from("longform_jobs").insert({id,source_id:series.source_id,series_id:seriesId,source_video_id:sourceVideoId,
-    token_hash:tokenHash,state:"created",stage:"created",message:"Waiting for Kaggle worker",heartbeat_at:now.toISOString(),
-    playlist_id:playlistId,expires_at:exp.toISOString()}).select("id,state,stage,heartbeat_at,expires_at,playlist_id").single();
+    token_hash:tokenHash,state:"created",stage:"created",message:"Waiting for source audio upload",heartbeat_at:now.toISOString(),
+    playlist_id:playlistId,expires_at:exp.toISOString(),input_audio_path:inputAudioPath,voice_audio_path:voiceAudioPath,
+    subtitle_path:subtitlePath,metadata_path:metadataPath,youtube_upload_url:uploadUrl}).select("id,state,stage,heartbeat_at,expires_at,playlist_id,input_audio_path").single();
   if(ins.error)throw new Error("job_insert_failed:"+ins.error.message);
   const vr=await db.from("videos").upsert({source_id:series.source_id,source_video_id:sourceVideoId,source_url:item.source_url,title:item.title,
     translated_title:series.playlist_title||series.series_title,status:"processing",rights_verified:true,rights_basis:item.rights_basis,
     original_audio_verified:true,series_id:seriesId,episode_number:ep,youtube_playlist_id:playlistId,processing_status:"longform_processing",processing_error:null},
     {onConflict:"source_id,source_video_id"});
   if(vr.error)throw new Error("video_job_save_failed:"+vr.error.message);
-  return Response.json({ok:true,stage:"job_created",job_id:id,job_token:token,callback_base:CALLBACK_BASE,upload_url:uploadUrl,
-    playlist_id:playlistId,episode_number:ep,channel_id:yt.connection.channel_id,channel_title:yt.connection.channel_title});
+  return Response.json({ok:true,stage:"job_created",job_id:id,job_token:token,callback_base:CALLBACK_BASE,
+    input_audio_upload_url:inputUpload.data.signedUrl,playlist_id:playlistId,episode_number:ep,
+    channel_id:yt.connection.channel_id,channel_title:yt.connection.channel_title});
+}
+async function workerConfig(req:Request,db:any,body:any){
+  const id=String(body.job_id||""), token=req.headers.get("x-job-token")||"", job=await loadJob(db,id,token);
+  if(["completed","failed","stalled"].includes(String(job.state)))return Response.json({ok:false,error:"job_terminal",state:job.state},{status:409});
+  const input=await db.storage.from("video-ingest").createSignedUrl(String(job.input_audio_path),7200);
+  const voice=await db.storage.from("video-ingest").createSignedUploadUrl(String(job.voice_audio_path),{upsert:true});
+  const subtitle=await db.storage.from("video-ingest").createSignedUploadUrl(String(job.subtitle_path),{upsert:true});
+  const metadata=await db.storage.from("video-ingest").createSignedUploadUrl(String(job.metadata_path),{upsert:true});
+  if(input.error||voice.error||subtitle.error||metadata.error||!input.data?.signedUrl||!voice.data?.signedUrl||!subtitle.data?.signedUrl||!metadata.data?.signedUrl)
+    throw new Error("worker_storage_signing_failed");
+  const si=await db.from("source_items").select("title,episode_number,series_title").eq("series_id",job.series_id).eq("source_item_id",job.source_video_id).single();
+  if(si.error)throw new Error("worker_source_item_lookup_failed:"+si.error.message);
+  return Response.json({ok:true,job_id:id,source_video_id:job.source_video_id,series_id:job.series_id,source_id:job.source_id,
+    title:si.data.title,series_title:si.data.series_title,episode_number:si.data.episode_number,
+    input_audio_url:input.data.signedUrl,
+    voice_upload_url:voice.data.signedUrl,
+    subtitle_upload_url:subtitle.data.signedUrl,
+    metadata_upload_url:metadata.data.signedUrl});
+}
+async function aiComplete(req:Request,db:any,body:any){
+  const id=String(body.job_id||""), token=req.headers.get("x-job-token")||"", job=await loadJob(db,id,token);
+  if(["completed","failed","stalled"].includes(String(job.state)))return Response.json({ok:false,error:"job_terminal",state:job.state},{status:409});
+  const folder=`longform/${id}`;
+  const check=await db.storage.from("video-ingest").list(folder,{limit:20});
+  if(check.error)throw new Error("worker_output_check_failed:"+check.error.message);
+  const names=new Set((check.data||[]).map((x:any)=>String(x.name)));
+  for(const required of ["voice.mp3","vi.srt","metadata.json"]){
+    if(!names.has(required))throw new Error("worker_output_missing:"+required);
+  }
+  const now=new Date().toISOString();
+  const translatedTitle=clip(String(body.translated_title||""),200);
+  const sha=clip(String(body.output_sha256||""),128);
+  const bytes=Number(body.output_bytes||0);
+  const u=await db.from("longform_jobs").update({state:"running",stage:"ai_ready",message:"AI processing complete; ready for mux/upload",
+    heartbeat_at:now,translated_title:translatedTitle||null,output_sha256:sha||null,output_bytes:Number.isFinite(bytes)&&bytes>0?bytes:null})
+    .eq("id",id).select("id,state,stage,message,heartbeat_at,translated_title,output_sha256,output_bytes").single();
+  if(u.error)throw new Error("ai_complete_update_failed:"+u.error.message);
+  return Response.json({ok:true,job:u.data});
+}
+async function result(req:Request,db:any,body:any){
+  await authorizeGitHub(req);
+  const id=String(body.job_id||""); if(!id)throw new Error("job_id_required");
+  const q=await db.from("longform_jobs").select("*").eq("id",id).single();
+  if(q.error)throw new Error("job_result_lookup_failed:"+q.error.message);
+  if(String(q.data.stage)!=="ai_ready")return Response.json({ok:false,error:"job_not_ai_ready",state:q.data.state,stage:q.data.stage},{status:409});
+  const voice=await db.storage.from("video-ingest").createSignedUrl(String(q.data.voice_audio_path),3600);
+  const subtitle=await db.storage.from("video-ingest").createSignedUrl(String(q.data.subtitle_path),3600);
+  const metadata=await db.storage.from("video-ingest").createSignedUrl(String(q.data.metadata_path),3600);
+  if(voice.error||subtitle.error||metadata.error||!voice.data?.signedUrl||!subtitle.data?.signedUrl||!metadata.data?.signedUrl)
+    throw new Error("result_storage_signing_failed");
+  return Response.json({ok:true,stage:"ai_ready",job_id:id,translated_title:q.data.translated_title,
+    voice_audio_url:voice.data.signedUrl,subtitle_url:subtitle.data.signedUrl,metadata_url:metadata.data.signedUrl,
+    youtube_upload_url:q.data.youtube_upload_url,playlist_id:q.data.playlist_id});
 }
 async function heartbeat(req:Request,db:any,body:any){
   const id=String(body.job_id||""), token=req.headers.get("x-job-token")||"", job=await loadJob(db,id,token);
@@ -206,8 +268,11 @@ Deno.serve(async(req:Request)=>{
     const db=createClient(Deno.env.get("SUPABASE_URL")!,adminKey(),{auth:{persistSession:false,autoRefreshToken:false}});
     const path=new URL(req.url).pathname, body=await req.json().catch(()=>({}));
     if(path.endsWith("/start"))return await start(req,db,body);
+    if(path.endsWith("/worker-config"))return await workerConfig(req,db,body);
     if(path.endsWith("/heartbeat"))return await heartbeat(req,db,body);
+    if(path.endsWith("/ai-complete"))return await aiComplete(req,db,body);
     if(path.endsWith("/fail"))return await fail(req,db,body);
+    if(path.endsWith("/result"))return await result(req,db,body);
     if(path.endsWith("/complete"))return await complete(req,db,body);
     if(path.endsWith("/status"))return await status(req,db,body);
     return Response.json({ok:false,error:"unknown_route"},{status:404});
