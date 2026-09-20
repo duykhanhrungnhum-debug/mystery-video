@@ -24,8 +24,7 @@ jobs:
     env:
       PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/processor-api
       WHISPER_MODEL: small
-      AI_AGENT_API_URL: ${{ secrets.AI_AGENT_API_URL }}
-      AI_AGENT_API_TOKEN: ${{ secrets.AI_AGENT_API_TOKEN }}
+      GH_TOKEN: ${{ secrets.HIDDEN_BEYOND_GITHUB_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -41,10 +40,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install "faster-whisper>=1.1,<2"
           pip install -e .
-          test -n "$AI_AGENT_API_URL" || { echo "AI_AGENT_API_URL missing"; exit 1; }
-          test -n "$AI_AGENT_API_TOKEN" || { echo "AI_AGENT_API_TOKEN missing"; exit 1; }
+          test -n "$GH_TOKEN" || { echo "HIDDEN_BEYOND_GITHUB_TOKEN missing"; exit 1; }
 
-      - name: Claim, AI- translate, preserve visuals and complete one video
+      - name: Claim video and prepare AI request
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -101,7 +99,7 @@ jobs:
           curl -fL "$ORIGINAL_URL" -o input.media
 
           set +e
-          python scripts/process_video.py             --input input.media             --output processed.mp4             --srt vi.srt             --metadata metadata.json             --title "$TITLE"
+          python scripts/prepare_ai_request.py --input input.media --output request.json --title "$TITLE" --video-id "$VIDEO_ID"
           processor_rc=$?
           set -e
 
@@ -116,17 +114,9 @@ jobs:
             exit "$processor_rc"
           fi
 
-          curl -fsS -X PUT "$PROCESSED_URL"             -H "content-type: video/mp4"             -H "cache-control: max-age=3600"             --data-binary @processed.mp4
-
-          curl -fsS -X PUT "$SUBTITLE_URL"             -H "content-type: text/plain"             -H "cache-control: max-age=3600"             --data-binary @vi.srt
-
-          TRANSLATED_TITLE="$(jq -r '.translated_title' metadata.json)"
-          DETECTED_LANGUAGE="$(jq -r '.detected_language' metadata.json)"
-
-          token="$(get_oidc)"
-          jq -n             --argjson video_id "$VIDEO_ID"             --arg translated_title "$TRANSLATED_TITLE"             --arg transcript_language "$DETECTED_LANGUAGE"             --arg processed_path "$PROCESSED_PATH"             --arg subtitle_path "$SUBTITLE_PATH"             '{video_id:$video_id,translated_title:$translated_title,transcript_language:$transcript_language,processed_path:$processed_path,subtitle_path:$subtitle_path}'             > complete.json
-
-          curl -fsS -X POST "$PROCESSOR_API/complete"             -H "Authorization: Bearer $token"             -H "content-type: application/json"             --data-binary @complete.json > complete-response.json
-
-          jq . complete-response.json
+          mkdir -p ai-request
+          cp request.json ai-request/request.json
+          echo "AI request prepared for video $VIDEO_ID. The on-demand AI- worker is invoked separately; no 24/7 AI server is required."
           COMPLETED=1
+          exit 0
+
