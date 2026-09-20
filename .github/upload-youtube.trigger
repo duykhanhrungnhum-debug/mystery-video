@@ -1,1 +1,1 @@
-trigger=2026-09-20-sample-v2-fixed-dubbing
+trigger=2026-09-20-sample-v4-dialogue-timing-sfx
