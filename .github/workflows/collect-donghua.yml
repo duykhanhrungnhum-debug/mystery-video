@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: hidden-beyond-donghua-collector
@@ -22,7 +23,6 @@ jobs:
     timeout-minutes: 20
     env:
       SUPABASE_URL: https://rlqqcuuphjmwksanbfml.supabase.co
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,5 +36,6 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -n "$SUPABASE_SERVICE_ROLE_KEY"
-          python scripts/collect_donghua_rotation.py
+          OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-collector" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          curl -fsSL -X POST "$SUPABASE_URL/functions/v1/donghua-collector-config" -H "Authorization: Bearer $OIDC" -H "Content-Type: application/json" > sources.json
+          python scripts/collect_donghua_rotation.py --sources-json sources.json
