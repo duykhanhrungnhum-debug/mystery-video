@@ -24,7 +24,8 @@ jobs:
     env:
       PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/processor-api
       WHISPER_MODEL: small
-      AI_AGENT_API_URL: ${{ secrets.AI_AGENT_API_URL }}\n      AI_AGENT_API_TOKEN: ${{ secrets.AI_AGENT_API_TOKEN }}
+      AI_AGENT_API_URL: ${{ secrets.AI_AGENT_API_URL }}
+      AI_AGENT_API_TOKEN: ${{ secrets.AI_AGENT_API_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +39,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-noto-core
           python -m pip install --upgrade pip
-          pip install "faster-whisper>=1.1,<2"\n          pip install -e .\n          test -n "$AI_AGENT_API_URL" || { echo "AI_AGENT_API_URL missing"; exit 1; }\n          test -n "$AI_AGENT_API_TOKEN" || { echo "AI_AGENT_API_TOKEN missing"; exit 1; }
+          pip install "faster-whisper>=1.1,<2"
+          pip install -e .
+          test -n "$AI_AGENT_API_URL" || { echo "AI_AGENT_API_URL missing"; exit 1; }
+          test -n "$AI_AGENT_API_TOKEN" || { echo "AI_AGENT_API_TOKEN missing"; exit 1; }
 
       - name: Claim, AI- translate, preserve visuals and complete one video
         shell: bash
