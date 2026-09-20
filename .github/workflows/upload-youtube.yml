@@ -34,8 +34,17 @@ jobs:
           stage="$(python -c 'import json; print(json.load(open("upload.json")).get("stage",""))')"
           if [ "$stage" = "uploaded" ]; then
             echo "YOUTUBE_UPLOAD_OK"
+          elif [ "$stage" = "playlist_repaired" ]; then
+            echo "YOUTUBE_PLAYLIST_REPAIR_OK"
           elif [ "$stage" = "idle" ]; then
             echo "::notice title=Upload queue idle::No processed video is waiting; this run is complete."
+          elif [ "$stage" = "oauth_scope_required" ]; then
+            reconnect="$(python -c 'import json; print(json.load(open("upload.json")).get("reconnect_url",""))')"
+            echo "::error title=YouTube playlist permission required::Reconnect once at $reconnect"
+            exit 2
+          elif [ "$stage" = "uploaded_playlist_pending" ]; then
+            echo "::error title=Video uploaded but playlist pending::Next run will repair playlist placement."
+            exit 3
           else
             echo "Unexpected uploader stage: $stage"
             exit 1
