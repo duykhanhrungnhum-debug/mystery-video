@@ -20,47 +20,54 @@ concurrency:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
-      SUPABASE_URL: https://rlqqcuuphjmwksanbfml.supabase.co
       SOURCE_AUDIT_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/source-audit-api
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
 
-      - name: Install source-audit runtime
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade yt-dlp
-
-      - name: Audit public donghua candidates once
-        run: |
-          set -Eeuo pipefail
-          python scripts/audit_donghua_sources.py --per-query 6 --max-details 24 --output source-audit.json
-          test -s source-audit.json
-
-      - name: Persist audit only
+      - name: Search Creative Commons candidates through YouTube Data API
         shell: bash
         run: |
           set -Eeuo pipefail
           OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-source-manager" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
           python - <<'PY'
           import json
-          report=json.load(open("source-audit.json",encoding="utf-8"))
-          json.dump({"items":report.get("items",[])},open("audit-body.json","w",encoding="utf-8"),ensure_ascii=False)
+          body={
+            "queries":[
+              "修仙 动画",
+              "仙侠 动画",
+              "穿越 动画",
+              "重生 系统 动画",
+              "xianxia animation",
+              "cultivation donghua"
+            ],
+            "per_query":8
+          }
+          json.dump(body,open("source-audit-request.json","w",encoding="utf-8"),ensure_ascii=False)
           PY
-          curl -fsSL -X POST "$SOURCE_AUDIT_API"             -H "Authorization: Bearer $OIDC"             -H "Content-Type: application/json"             --data-binary @audit-body.json > audit-response.json
-          cat audit-response.json
-          test "$(python -c 'import json; print(str(json.load(open("audit-response.json")).get("ok",False)).lower())')" = "true"
+          curl -fsSL -X POST "$SOURCE_AUDIT_API"             -H "Authorization: Bearer $OIDC"             -H "Content-Type: application/json"             --data-binary @source-audit-request.json > source-audit-response.json
+          cat source-audit-response.json
+          python - <<'PY'
+          import json
+          d=json.load(open("source-audit-response.json",encoding="utf-8"))
+          assert d.get("ok") is True, d
+          assert d.get("mode")=="youtube-data-api-creative-commons-search", d
+          print(
+            "SOURCE_MANAGER_OK",
+            "discovered="+str(d.get("discovered_unique",0)),
+            "cc_candidates="+str(d.get("cc_candidate_count",0)),
+            "search_errors="+str(len(d.get("search_errors") or [])),
+            "bot_search=false"
+          )
+          PY
 
       - name: Upload source-manager evidence
         uses: actions/upload-artifact@v4
         with:
           name: source-manager-audit
           path: |
-            source-audit.json
-            audit-response.json
+            source-audit-request.json
+            source-audit-response.json
           retention-days: 7
           if-no-files-found: error
