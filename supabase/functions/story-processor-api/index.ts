@@ -2,8 +2,18 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { createRemoteJWKSet, jwtVerify } from "npm:jose@5";
 
-const REPO = "duykhanhrungnhum-debug/mystery-video";
 const AUDIENCE = "hidden-beyond-story-processor";
+const ALLOWED_WORKFLOWS: Record<string, string[]> = {
+  "duykhanhrungnhum-debug/mystery-video": [
+    "duykhanhrungnhum-debug/mystery-video/.github/workflows/process-story.yml@",
+    "duykhanhrungnhum-debug/mystery-video/.github/workflows/process-story-visuals.yml@",
+    "duykhanhrungnhum-debug/mystery-video/.github/workflows/repair-story-audio.yml@",
+    "duykhanhrungnhum-debug/mystery-video/.github/workflows/import-story-visuals.yml@",
+  ],
+  "duykhanhrungnhum-debug/AI-": [
+    "duykhanhrungnhum-debug/AI-/.github/workflows/hidden-beyond-story-visual-worker.yml@",
+  ],
+};
 const JWKS = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
 const MAX_REPAIR_ATTEMPTS = 3;
 const MAX_VERIFICATION_ATTEMPTS = 5;
@@ -26,16 +36,12 @@ async function verifyGitHub(req:Request) {
     issuer:"https://token.actions.githubusercontent.com",
     audience:AUDIENCE
   });
-  if(payload.repository!==REPO) throw new Error("wrong_repository");
+  const repository=String(payload.repository||"");
+  const allowedWorkflows=ALLOWED_WORKFLOWS[repository];
+  if(!allowedWorkflows) throw new Error("wrong_repository");
   if(payload.ref!=="refs/heads/main") throw new Error("wrong_ref");
   if(!["schedule","workflow_dispatch","push"].includes(String(payload.event_name||""))) throw new Error("wrong_event");
   const workflowRef=String(payload.job_workflow_ref||"");
-  const allowedWorkflows=[
-    REPO+"/.github/workflows/process-story.yml@",
-    REPO+"/.github/workflows/process-story-visuals.yml@",
-    REPO+"/.github/workflows/repair-story-audio.yml@",
-    REPO+"/.github/workflows/import-story-visuals.yml@"
-  ];
   if(workflowRef && !allowedWorkflows.some((prefix)=>workflowRef.startsWith(prefix))) throw new Error("wrong_workflow");
 }
 
