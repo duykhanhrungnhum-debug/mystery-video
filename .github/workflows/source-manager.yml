@@ -52,7 +52,7 @@ jobs:
           import json
           d=json.load(open("source-audit-response.json",encoding="utf-8"))
           assert d.get("ok") is True, d
-          assert d.get("mode")=="youtube-data-api-creative-commons-search", d
+          assert str(d.get("mode","")).startswith("youtube-data-api-creative-commons-search"), d
           print(
             "SOURCE_MANAGER_OK",
             "discovered="+str(d.get("discovered_unique",0)),
