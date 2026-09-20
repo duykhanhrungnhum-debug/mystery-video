@@ -1,0 +1,61 @@
+name: Hidden Beyond Resume AI Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      ai_run_id:
+        required: true
+        type: string
+      request_run_id:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.HIDDEN_BEYOND_GITHUB_TOKEN }}
+      PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/processor-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require cross-repo credential
+        run: test -n "$GH_TOKEN" || { echo "HIDDEN_BEYOND_GITHUB_TOKEN missing"; exit 1; }
+      - name: Download request and AI result
+        run: |
+          mkdir -p request ai-result
+          gh run download "${{ inputs.request_run_id }}" --repo duykhanhrungnhum-debug/mystery-video --name hidden-beyond-ai-request --dir request
+          gh run download "${{ inputs.ai_run_id }}" --repo duykhanhrungnhum-debug/AI- --name hidden-beyond-ai-result --dir ai-result
+          test -s request/input.media
+          test -s request/claim.json
+          test -s ai-result/result.json
+      - name: Mux Vietnamese dub and subtitles
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python scripts/finish_ai_video.py --input request/input.media --result ai-result/result.json --output processed.mp4 --srt vi.srt --metadata metadata.json
+          ffprobe -v error -show_entries stream=codec_type -of csv=p=0 processed.mp4 | grep -q video
+          ffprobe -v error -show_entries stream=codec_type -of csv=p=0 processed.mp4 | grep -q audio
+      - name: Upload and complete
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          get_oidc() {
+            curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-processor" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+          VIDEO_ID="$(jq -r '.job.video_id' request/claim.json)"
+          PROCESSED_URL="$(jq -r '.job.processed.signedUrl' request/claim.json)"
+          SUBTITLE_URL="$(jq -r '.job.subtitle.signedUrl' request/claim.json)"
+          PROCESSED_PATH="$(jq -r '.job.processed.path' request/claim.json)"
+          SUBTITLE_PATH="$(jq -r '.job.subtitle.path' request/claim.json)"
+          curl -fsS -X PUT "$PROCESSED_URL" -H "content-type: video/mp4" --data-binary @processed.mp4
+          curl -fsS -X PUT "$SUBTITLE_URL" -H "content-type: text/plain" --data-binary @vi.srt
+          TITLE="$(jq -r '.translated_title' metadata.json)"
+          LANG="$(jq -r '.detected_language' request/request.json)"
+          token="$(get_oidc)"
+          jq -n --argjson video_id "$VIDEO_ID" --arg translated_title "$TITLE" --arg transcript_language "$LANG" --arg processed_path "$PROCESSED_PATH" --arg subtitle_path "$SUBTITLE_PATH" '{video_id:$video_id,translated_title:$translated_title,transcript_language:$transcript_language,processed_path:$processed_path,subtitle_path:$subtitle_path}' > complete.json
+          curl -fsS -X POST "$PROCESSOR_API/complete" -H "Authorization: Bearer $token" -H "content-type: application/json" --data-binary @complete.json | jq .
