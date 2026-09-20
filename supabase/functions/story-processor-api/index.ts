@@ -12,6 +12,7 @@ const ALLOWED_WORKFLOWS: Record<string, string[]> = {
   ],
   "duykhanhrungnhum-debug/AI-": [
     "duykhanhrungnhum-debug/AI-/.github/workflows/hidden-beyond-story-visual-worker.yml@",
+    "duykhanhrungnhum-debug/AI-/.github/workflows/hidden-beyond-story-narrative-verify.yml@",
   ],
 };
 const JWKS = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
@@ -56,6 +57,58 @@ Deno.serve(async(req:Request)=>{
     const supabase=createClient(Deno.env.get("SUPABASE_URL")!,adminKey(),{auth:{persistSession:false,autoRefreshToken:false}});
     const path=new URL(req.url).pathname;
     let body:any={}; try{body=await req.json();}catch{}
+
+    if(path.endsWith("/narrative-verify-claim")){
+      const candidates=await supabase.from("story_episodes")
+        .select("id,series_id,episode_no,title_vi,source_text,script_vi,status,processing_status,visual_status,final_video_storage_path,verification_status,publish_ready,story_series!inner(title,source_key)")
+        .eq("status","video_ready")
+        .eq("processing_status","complete")
+        .eq("visual_status","complete")
+        .is("youtube_video_id",null)
+        .not("final_video_storage_path","is",null)
+        .order("id",{ascending:true})
+        .limit(50);
+      if(candidates.error) throw new Error("narrative_verify_queue_lookup_failed: "+candidates.error.message);
+
+      let candidate:any=null;
+      for(const row of candidates.data||[]){
+        if(!String(row.source_text||"").trim()||!String(row.script_vi||"").trim()) continue;
+        if(Number(row.episode_no)>1){
+          const prev=await supabase.from("story_episodes")
+            .select("status,youtube_video_id,uploaded_at")
+            .eq("series_id",row.series_id)
+            .eq("episode_no",Number(row.episode_no)-1)
+            .maybeSingle();
+          if(prev.error) throw new Error("narrative_verify_previous_lookup_failed: "+prev.error.message);
+          if(!(prev.data?.status==="uploaded" && prev.data?.youtube_video_id && prev.data?.uploaded_at)) continue;
+        }
+        candidate=row; break;
+      }
+      if(!candidate) return Response.json({ok:true,stage:"idle",reason:"no_video_ready_episode_for_narrative_verification"});
+
+      const claimed=await supabase.from("story_episodes").update({
+        verification_status:"verifying",
+        publish_ready:false,
+        last_verification_error:null,
+        verified_at:null
+      }).eq("id",candidate.id)
+        .eq("status","video_ready")
+        .select("id,series_id,episode_no,title_vi,source_text,script_vi,status,verification_status,publish_ready,final_video_storage_path")
+        .single();
+      if(claimed.error) throw new Error("narrative_verify_claim_failed: "+claimed.error.message);
+
+      return Response.json({ok:true,stage:"narrative_verify_claimed",job:{
+        episode_id:claimed.data.id,
+        series_id:claimed.data.series_id,
+        series_title:(candidate.story_series as any).title,
+        source_key:(candidate.story_series as any).source_key,
+        episode_no:claimed.data.episode_no,
+        title_vi:claimed.data.title_vi,
+        source_text:claimed.data.source_text,
+        script_vi:claimed.data.script_vi,
+        final_video_storage_path:claimed.data.final_video_storage_path
+      }});
+    }
 
     if(path.endsWith("/claim")){
       const requestedKey=String(body?.source_key||"").trim();
@@ -529,16 +582,16 @@ Deno.serve(async(req:Request)=>{
         visual_last_repair_signature:repairSignature,
         visual_mode:"ai_generated_slideshow",
         final_video_storage_path:expectedFinal,
-        verification_status:"passed",
-        verification_attempts:1,
+        verification_status:"pending",
+        verification_attempts:0,
         last_verification_error:null,
-        verified_at:now,
-        publish_ready:true
+        verified_at:null,
+        publish_ready:false
       }).eq("id",id)
         .select("id,series_id,episode_no,status,visual_status,final_video_storage_path,verification_status,verified_at,publish_ready")
         .single();
       if(updated.error) throw new Error("visual_complete_update_failed: "+updated.error.message);
-      return Response.json({ok:true,stage:"verified_publish_ready",episode:updated.data});
+      return Response.json({ok:true,stage:"technical_video_ready",episode:updated.data});
     }
 
     if(path.endsWith("/verify-pass")){
