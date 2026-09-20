@@ -1,1 +1,1 @@
-trigger=2026-09-20-real-collector-1
+trigger=2026-09-20-secretless-collector-2
