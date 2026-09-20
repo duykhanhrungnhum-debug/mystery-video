@@ -1,1 +1,1 @@
-trigger=2026-09-20-series-policy-playlist-v1
+trigger=2026-09-20-five-channel-one-series-pool-v1
