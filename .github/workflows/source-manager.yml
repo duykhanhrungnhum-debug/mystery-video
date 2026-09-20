@@ -35,14 +35,17 @@ jobs:
           import json
           body={
             "queries":[
-              "修仙 动画",
-              "仙侠 动画",
-              "穿越 动画",
-              "重生 系统 动画",
-              "xianxia animation",
-              "cultivation donghua"
+              "修仙 一口气看完 动画",
+              "仙侠 一口气看完 动画",
+              "玄幻 一口气看完 动态漫画",
+              "穿越 系统 一口气看完",
+              "重生 系统 动态漫画 合集",
+              "沙雕修仙 一口气看完",
+              "修仙 完结 合集 动画",
+              "xianxia cultivation full story animation"
             ],
-            "per_query":8
+            "per_query":10,
+            "duration_filters":["long","medium"]
           }
           json.dump(body,open("source-audit-request.json","w",encoding="utf-8"),ensure_ascii=False)
           PY
