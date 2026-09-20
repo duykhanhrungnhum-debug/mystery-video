@@ -1,1 +1,1 @@
-trigger=2026-09-20-expand-approved-youtube-sources-v4
+trigger=2026-09-20-longform-target-channel-search-v5
