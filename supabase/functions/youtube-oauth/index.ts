@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 const cors = { "content-type": "text/html; charset=utf-8" };
 const youtubeScope = "https://www.googleapis.com/auth/youtube.upload";
@@ -7,7 +8,16 @@ const youtubePlaylistScope = "https://www.googleapis.com/auth/youtube.force-ssl"
 const identityScope = "openid email";
 const expectedAccount = "maiduan2589@gmail.com";
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+function adminKey(): string {
+  const modern = Deno.env.get("SUPABASE_SECRET_KEYS");
+  if (modern) {
+    const parsed = JSON.parse(modern);
+    if (parsed.default) return parsed.default;
+  }
+  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!legacy) throw new Error("No Supabase admin key is available");
+  return legacy;
+}
 const clientId = Deno.env.get("YOUTUBE_CLIENT_ID")!;
 const clientSecret = Deno.env.get("YOUTUBE_CLIENT_SECRET")!;
 const callbackUrl = Deno.env.get("YOUTUBE_REDIRECT_URI")!;
@@ -107,28 +117,29 @@ async function handle(req: Request) {
     return new Response("OAuth succeeded but no refresh token was returned. Re-run consent.", { status: 502, headers: cors });
   }
 
-  const saveRes = await fetch(`${supabaseUrl}/rest/v1/youtube_connections`, {
-    method: "POST",
-    headers: {
-      apikey: serviceKey,
-      authorization: `Bearer ${serviceKey}`,
-      "content-type": "application/json",
-      prefer: "resolution=merge-duplicates",
-    },
-    body: JSON.stringify({
+  const db = createClient(supabaseUrl, adminKey(), {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+
+  const saveRes = await db
+    .from("youtube_connections")
+    .upsert({
       provider: "youtube",
       channel_id: channel.id,
       channel_title: channel.snippet.title,
       refresh_token: refreshToken,
       scope: token.scope ?? `${youtubeScope} ${youtubeReadonlyScope} ${youtubePlaylistScope} ${identityScope}`,
       updated_at: new Date().toISOString(),
-    }),
-  });
+    }, { onConflict: "channel_id" })
+    .select("channel_id,channel_title,scope,updated_at")
+    .single();
 
-  if (!saveRes.ok) {
-    return new Response("YouTube connected, but secure token storage failed.", { status: 502, headers: cors });
+  if (saveRes.error) {
+    return new Response(
+      `YouTube connected, but secure token storage failed: ${escapeHtml(saveRes.error.message)}`,
+      { status: 502, headers: cors }
+    );
   }
-
   return new Response(
     `<h2>YouTube connected</h2><p>Google account: <b>${escapeHtml(user.email)}</b></p><p>Channel: <b>${escapeHtml(channel.snippet.title)}</b></p><p>Channel ID: <code>${escapeHtml(channel.id)}</code></p><p>OAuth verification succeeded.</p>`,
     { status: 200, headers: cors },
