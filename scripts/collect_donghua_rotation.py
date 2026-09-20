@@ -44,7 +44,6 @@ def main():
             rows.append({"source_id":sid,"source_video_id":vid,"source_url":u,
                          "title":x.get("title"),"status":"discovered",
                          "rights_verified":False,"original_audio_verified":False})
-        # Discovery is intentionally read-only here. Queue insertion happens only after\n        # the item has passed the existing rights/download gate.\n        total+=len(rows)
-        print(f"source={sid} discovered={len(rows)} checkpoint=source_id+source_video_id")
+        # Discovery is intentionally read-only here. Queue insertion happens only after\n        # the item has passed the existing rights/download gate.\n        total += len(rows)\n        print(f"source={sid} discovered={len(rows)} checkpoint=source_id+source_video_id")
     print(f"COLLECTOR_OK discovered={total} sources={len(SOURCE_IDS)}")
 if __name__=="__main__": main()
