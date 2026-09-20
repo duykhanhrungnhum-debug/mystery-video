@@ -1,0 +1,104 @@
+name: Hidden Beyond Approved Morevna Ingest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/ingest-morevna.trigger"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+  id-token: write
+
+concurrency:
+  group: hidden-beyond-approved-morevna-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APPROVED_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/approved-media-api
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_VIDEO_ID: pepper-carrot-ep03
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install media tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg jq
+
+      - name: Prepare approved ingest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-approved-ingest" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          jq -n --arg source_video_id "$SOURCE_VIDEO_ID" '{source_video_id:$source_video_id}' > body.json
+          curl -fsSL -X POST "$APPROVED_API/prepare" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @body.json > prepare.json
+          cat prepare.json
+          stage="$(jq -r '.stage' prepare.json)"
+          if [ "$stage" = "already_uploaded" ]; then
+            echo "SKIP_ALL=1" >> "$GITHUB_ENV"
+          elif [ "$stage" = "already_ingested" ]; then
+            echo "SKIP_DOWNLOAD=1" >> "$GITHUB_ENV"
+          elif [ "$stage" != "ready" ]; then
+            echo "Unexpected prepare stage: $stage"
+            exit 1
+          fi
+
+      - name: Download verified CC source
+        if: ${{ env.SKIP_ALL != '1' && env.SKIP_DOWNLOAD != '1' }}
+        run: |
+          python - <<'PY'
+          import json, urllib.parse, urllib.request
+          title="File:Pepper&Carrot Episode 3 - The Secret Ingredients.ogv"
+          q=urllib.parse.urlencode({"action":"query","format":"json","prop":"videoinfo","viprop":"url|derivatives","titles":title})
+          req=urllib.request.Request("https://commons.wikimedia.org/w/api.php?"+q,headers={"User-Agent":"HiddenBeyond/1.0 (approved open animation ingest)"})
+          with urllib.request.urlopen(req,timeout=60) as r:
+              data=json.load(r)
+          page=next(iter(data["query"]["pages"].values()))
+          info=page["videoinfo"][0]
+          ds=[d for d in info.get("derivatives",[]) if d.get("src") and str(d.get("type","")).startswith("video/")]
+          preferred=[d for d in ds if int(d.get("width") or 0)<=1280 and int(d.get("width") or 0)>=480]
+          chosen=max(preferred or ds,key=lambda d:int(d.get("width") or 0))
+          print("selected",chosen.get("width"),chosen.get("height"),chosen.get("type"),chosen["src"])
+          open("source-url.txt","w").write(chosen["src"])
+          PY
+          curl -fL --retry 3 --retry-all-errors "$(cat source-url.txt)" -o source.media
+          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 source.media
+
+      - name: Normalize under storage limit and verify audio
+        if: ${{ env.SKIP_ALL != '1' && env.SKIP_DOWNLOAD != '1' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ffmpeg -y -i source.media -vf "scale='min(854,iw)':-2" -c:v libx264 -preset medium -crf 23 -maxrate 1200k -bufsize 2400k -c:a aac -b:a 128k -movflags +faststart input.mp4
+          test "$(stat -c%s input.mp4)" -lt 40000000 || ffmpeg -y -i source.media -vf "scale='min(854,iw)':-2" -c:v libx264 -preset medium -b:v 750k -maxrate 850k -bufsize 1700k -c:a aac -b:a 96k -movflags +faststart input.mp4
+          test "$(stat -c%s input.mp4)" -lt 40000000
+          ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 input.mp4 | grep -q video
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_type -of csv=p=0 input.mp4 | grep -q audio
+
+      - name: Upload approved media and queue processor
+        if: ${{ env.SKIP_ALL != '1' && env.SKIP_DOWNLOAD != '1' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          URL="$(jq -r '.upload.signedUrl' prepare.json)"
+          test -n "$URL" && test "$URL" != "null"
+          curl -fsS -X PUT "$URL" -H "content-type: video/mp4" --data-binary @input.mp4
+          OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-approved-ingest" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          SIZE="$(stat -c%s input.mp4)"
+          jq -n --arg source_video_id "$SOURCE_VIDEO_ID" --argjson size_bytes "$SIZE" '{source_video_id:$source_video_id,audio_verified:true,size_bytes:$size_bytes}' > final.json
+          curl -fsSL -X POST "$APPROVED_API/finalize" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @final.json > queued.json
+          cat queued.json
+          test "$(jq -r '.stage' queued.json)" = "queued"
+
+      - name: Start processor now
+        if: ${{ env.SKIP_ALL != '1' }}
+        run: |
+          gh workflow run process-video.yml --repo duykhanhrungnhum-debug/mystery-video
+          echo "Processor dispatched."
