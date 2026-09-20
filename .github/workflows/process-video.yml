@@ -79,7 +79,8 @@ jobs:
 
           stage="$(jq -r '.stage' claim.json)"
           if [ "$stage" = "idle" ]; then
-            echo "No processing job is waiting."
+            echo "::notice title=Queue idle::No eligible processing job. This is a normal terminal state for this run; do not retry claim in a loop."
+            jq -n '{state:"idle",reason:"no_eligible_job",retry_in_run:false}' > processor-state.json
             COMPLETED=1
             exit 0
           fi
@@ -120,7 +121,19 @@ jobs:
           cp claim.json ai-request/claim.json
           cp input.media ai-request/input.media
           echo "AI request prepared for video $VIDEO_ID."
+          jq -n --argjson video_id "$VIDEO_ID" '{state:"handoff_ready",video_id:$video_id,retry_in_run:false}' > processor-state.json
+          # Do not mark the claimed job complete here. The downstream AI/resume
+          # stages own completion; failures after claim must remain recoverable.
           COMPLETED=1
+
+      - name: Persist processor state
+        if: ${{ always() && hashFiles('processor-state.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidden-beyond-processor-state
+          path: processor-state.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload request package
         if: ${{ hashFiles('ai-request/request.json') != '' }}
