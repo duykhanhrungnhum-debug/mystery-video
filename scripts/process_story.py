@@ -14,6 +14,8 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
+from story_quality import is_degenerate_rewrite
+
 TRANSLATION_MODEL = os.environ.get("STORY_TRANSLATION_MODEL", "Helsinki-NLP/opus-mt-zh-vi")
 REWRITE_MODEL = os.environ.get("STORY_REWRITE_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
 TTS_VOICE = os.environ.get("STORY_TTS_VOICE", "vi_VN-vais1000-medium")
@@ -146,17 +148,20 @@ def rewrite_narration(parts):
         ]
         prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=3072)
+        group_tokens = len(tokenizer(group, add_special_tokens=False)["input_ids"])
+        max_new_tokens = min(680, max(180, int(group_tokens * 1.35)))
         with torch.inference_mode():
             output = model.generate(
                 **inputs,
-                max_new_tokens=720,
+                max_new_tokens=max_new_tokens,
                 do_sample=False,
-                repetition_penalty=1.06,
+                repetition_penalty=1.12,
+                no_repeat_ngram_size=4,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.eos_token_id,
             )
         text = tokenizer.decode(output[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
-        if len(text) < max(120, int(len(group) * 0.35)):
+        if is_degenerate_rewrite(text, group):
             text = group
             fallbacks += 1
         rewritten.append(text)
@@ -300,7 +305,12 @@ def main():
             "Sau đây là phiên bản kể chuyện tiếng Việt được biên tập từ nguyên tác thuộc phạm vi công cộng."
         )
         outro = "Hết tập này. Câu chuyện sẽ tiếp tục ở tập kế tiếp."
-        script = intro + "\n\n" + "\n\n".join(rewritten) + "\n\n" + outro
+        translated_body = "\n\n".join(x for x in translations if x.strip())
+        body = "\n\n".join(rewritten)
+        if is_degenerate_rewrite(body, translated_body):
+            body = translated_body
+            fallbacks = max(fallbacks, len(rewritten))
+        script = intro + "\n\n" + body + "\n\n" + outro
 
         if len(script) < 300:
             raise RuntimeError("Generated Vietnamese script is too short")
@@ -328,7 +338,8 @@ def main():
             "visual_plan": visual_plan,
             "generation_notes": (
                 "Vietnamese script generated locally from public-domain source. "
-                "Translation uses Apache-2.0 OPUS-MT zh-vi; narration rewrite uses Apache-2.0 Qwen2.5-0.5B-Instruct. "
+                "Translation uses Apache-2.0 OPUS-MT zh-vi; narration rewrite uses Apache-2.0 Qwen2.5-0.5B-Instruct "
+                "with degeneration detection and automatic OPUS-MT fallback. "
                 "TTS uses Piper vi_VN-vais1000-medium; its model card lists the VAIS-1000 dataset as CC BY 4.0. "
                 "Preview image is procedural and is NOT the final AI-animation stage."
             ),
