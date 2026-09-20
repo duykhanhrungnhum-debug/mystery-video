@@ -6,8 +6,7 @@ checkpoint. It never re-inserts an episode already known to the database.
 Discovery and processing are separate; the processor owns downstream state.
 """
 from __future__ import annotations
-import re, subprocess, sys
-from mystery_video.db import get_client
+import argparse, json, re, subprocess, sys
 
 SOURCE_IDS=(19,20,21,22,23)
 
@@ -25,15 +24,17 @@ def episode_key(item):
     return (int(nums[-1]) if nums else 10**9, str(item.get("upload_date") or ""), title)
 
 def main():
-    db=get_client()
-    sources=(db.table("sources").select("id,name,url,active").in_("id",list(SOURCE_IDS)).execute().data or [])
-    by_id={int(s["id"]):s for s in sources if s.get("active")}
+    ap=argparse.ArgumentParser(); ap.add_argument("--sources-json",required=True); args=ap.parse_args()
+    payload=json.load(open(args.sources_json,encoding="utf-8"))
+    if not payload.get("ok"): raise RuntimeError(payload)
+    sources=payload.get("sources") or []
+    by_id={int(x["id"]):x for x in sources if x.get("active")}
     total=0
     for sid in SOURCE_IDS:
         s=by_id.get(sid)
         if not s:
             print(f"source={sid} skipped=inactive_or_missing"); continue
-        found=sorted(entries(s["url"]),key=episode_key)
+        found=sorted(entries(s["channel_url"]),key=episode_key)
         rows=[]
         for x in found:
             vid=str(x.get("id") or "").strip()
@@ -43,9 +44,7 @@ def main():
             rows.append({"source_id":sid,"source_video_id":vid,"source_url":u,
                          "title":x.get("title"),"status":"discovered",
                          "rights_verified":False,"original_audio_verified":False})
-        if rows:
-            db.table("videos").upsert(rows,on_conflict="source_id,source_video_id",ignore_duplicates=True).execute()
-        total+=len(rows)
+        # Discovery is intentionally read-only here. Queue insertion happens only after\n        # the item has passed the existing rights/download gate.\n        total+=len(rows)
         print(f"source={sid} discovered={len(rows)} checkpoint=source_id+source_video_id")
     print(f"COLLECTOR_OK discovered={total} sources={len(SOURCE_IDS)}")
 if __name__=="__main__": main()
