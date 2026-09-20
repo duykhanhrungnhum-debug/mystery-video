@@ -3,6 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 const cors = { "content-type": "text/html; charset=utf-8" };
 const youtubeScope = "https://www.googleapis.com/auth/youtube.upload";
 const youtubeReadonlyScope = "https://www.googleapis.com/auth/youtube.readonly";
+const youtubePlaylistScope = "https://www.googleapis.com/auth/youtube.force-ssl";
 const identityScope = "openid email";
 const expectedAccount = "maiduan2589@gmail.com";
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -34,7 +35,7 @@ async function handle(req: Request) {
     auth.searchParams.set("client_id", clientId);
     auth.searchParams.set("redirect_uri", callbackUrl);
     auth.searchParams.set("response_type", "code");
-    auth.searchParams.set("scope", `${youtubeScope} ${youtubeReadonlyScope} ${identityScope}`);
+    auth.searchParams.set("scope", `${youtubeScope} ${youtubeReadonlyScope} ${youtubePlaylistScope} ${identityScope}`);
     auth.searchParams.set("include_granted_scopes", "true");
     auth.searchParams.set("access_type", "offline");
     auth.searchParams.set("prompt", "select_account consent");
@@ -119,7 +120,7 @@ async function handle(req: Request) {
       channel_id: channel.id,
       channel_title: channel.snippet.title,
       refresh_token: refreshToken,
-      scope: token.scope ?? `${youtubeScope} ${youtubeReadonlyScope} ${identityScope}`,
+      scope: token.scope ?? `${youtubeScope} ${youtubeReadonlyScope} ${youtubePlaylistScope} ${identityScope}`,
       updated_at: new Date().toISOString(),
     }),
   });
