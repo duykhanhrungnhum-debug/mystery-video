@@ -1,6 +1,10 @@
 name: Hidden Beyond Donghua Collector
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/collect-donghua.trigger"
   schedule:
     - cron: "7,37 * * * *"
   workflow_dispatch:
