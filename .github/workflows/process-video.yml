@@ -1,4 +1,4 @@
-name: Hidden Beyond Processor # nllb-vi-v2
+name: Hidden Beyond Processor # ai-bridge-v1
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
     env:
       PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/processor-api
       WHISPER_MODEL: small
-      TRANSLATION_MODEL: facebook/nllb-200-distilled-600M
+      AI_AGENT_API_URL: ${{ secrets.AI_AGENT_API_URL }}\n      AI_AGENT_API_TOKEN: ${{ secrets.AI_AGENT_API_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -38,9 +38,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-noto-core
           python -m pip install --upgrade pip
-          pip install "faster-whisper>=1.1,<2" "transformers>=4.45,<5" "sentencepiece>=0.2,<1" "torch>=2.2" "sacremoses>=0.1"
+          pip install "faster-whisper>=1.1,<2"\n          pip install -e .\n          test -n "$AI_AGENT_API_URL" || { echo "AI_AGENT_API_URL missing"; exit 1; }\n          test -n "$AI_AGENT_API_TOKEN" || { echo "AI_AGENT_API_TOKEN missing"; exit 1; }
 
-      - name: Claim, translate, subtitle, render and complete one video
+      - name: Claim, AI- translate, preserve visuals and complete one video
         shell: bash
         run: |
           set -Eeuo pipefail
