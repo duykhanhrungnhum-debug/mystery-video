@@ -30,6 +30,7 @@ def main():
     sources=payload.get("sources") or []
     by_id={int(x["id"]):x for x in sources if x.get("active")}
     total=0
+    all_rows=[]
     for sid in SOURCE_IDS:
         s=by_id.get(sid)
         if not s:
@@ -45,5 +46,6 @@ def main():
                          "title":x.get("title"),"status":"discovered",
                          "rights_verified":False,"original_audio_verified":False})
         # Discovery is intentionally read-only here. Queue insertion happens only after\n        # the item has passed the existing rights/download gate.\n        total += len(rows)\n        print(f"source={sid} discovered={len(rows)} checkpoint=source_id+source_video_id")
-    print(f"COLLECTOR_OK discovered={total} sources={len(SOURCE_IDS)}")
+    with open("donghua-candidates.json","w",encoding="utf-8") as out: json.dump({"candidates":all_rows},out,ensure_ascii=False,indent=2)
+    print(f"COLLECTOR_OK discovered={total} sources={len(SOURCE_IDS)} artifact=donghua-candidates.json")
 if __name__=="__main__": main()
