@@ -116,7 +116,23 @@ jobs:
 
           mkdir -p ai-request
           cp request.json ai-request/request.json
-          echo "AI request prepared for video $VIDEO_ID. The on-demand AI- worker is invoked separately; no 24/7 AI server is required."
+          cp claim.json ai-request/claim.json
+          cp input.media ai-request/input.media
+          echo "AI request prepared for video $VIDEO_ID."
           COMPLETED=1
-          exit 0
+
+      - name: Upload request package
+        if: ${{ hashFiles('ai-request/request.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidden-beyond-ai-request
+          path: ai-request/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Wake AI- on demand
+        if: ${{ hashFiles('ai-request/request.json') != '' }}
+        run: |
+          gh workflow run hidden-beyond-on-demand.yml --repo duykhanhrungnhum-debug/AI- -f request_artifact_run_id="$GITHUB_RUN_ID"
+          echo "AI- worker dispatched for Bot run $GITHUB_RUN_ID"
 
