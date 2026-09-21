@@ -54,6 +54,17 @@ async function youtubeAccess(db:any){
   if(!r.ok||!b.access_token) throw new Error("youtube_token_refresh_failed:"+JSON.stringify(b));
   return {token:String(b.access_token),connection:q.data};
 }
+async function getLongUploadsStatus(token:string){
+  const url=new URL("https://www.googleapis.com/youtube/v3/channels");
+  url.searchParams.set("part","status");
+  url.searchParams.set("mine","true");
+  const r=await fetch(url,{headers:{authorization:"Bearer "+token}});
+  const b=await r.json();
+  if(!r.ok)throw new Error("youtube_long_upload_status_failed:"+r.status+":"+JSON.stringify(b));
+  const item=Array.isArray(b.items)?b.items[0]:null;
+  if(!item)throw new Error("youtube_channel_not_found");
+  return String(item?.status?.longUploadsStatus||"");
+}
 async function loadSeriesItem(db:any,seriesId:number,sourceVideoId:string){
   const sq=await db.from("source_series").select("id,source_id,series_title,playlist_title,youtube_playlist_id,state,latest_episode_seen")
     .eq("id",seriesId).single();
@@ -123,7 +134,21 @@ async function start(req:Request,db:any,body:any){
       return Response.json({ok:false,stage:"job_already_active",job:active.data},{status:409});
     await db.from("longform_jobs").update({state:"stalled",stage:"stalled",message:"Superseded after stale heartbeat",failed_at:new Date().toISOString()}).eq("id",active.data.id);
   }
-  const yt=await youtubeAccess(db), playlistId=await ensurePlaylist(db,yt.token,series);
+  const yt=await youtubeAccess(db);
+  const longUploadsStatus=await getLongUploadsStatus(yt.token);
+  if(longUploadsStatus!=="allowed"){
+    return Response.json({
+      ok:false,
+      stage:"long_uploads_not_allowed",
+      long_uploads_status:longUploadsStatus,
+      required_status:"allowed",
+      verification_url:"https://www.youtube.com/verify",
+      message:longUploadsStatus==="eligible"
+        ?"Channel is eligible but phone verification is required before videos longer than 15 minutes can be uploaded."
+        :"Channel is not currently allowed to upload videos longer than 15 minutes."
+    },{status:409});
+  }
+  const playlistId=await ensurePlaylist(db,yt.token,series);
   const ep=Number(item.episode_number||1), title=clip("Tập "+ep+" | "+String(series.playlist_title||series.series_title),100);
   const src=await db.from("sources").select("name").eq("id",series.source_id).single();
   if(src.error)throw new Error("source_lookup_failed:"+src.error.message);
