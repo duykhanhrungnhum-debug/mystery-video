@@ -120,11 +120,13 @@ async function loadJob(db:any,id:string,token:string){
 async function start(req:Request,db:any,body:any){
   await authorizeGitHub(req);
   const seriesId=Number(body.series_id||0), sourceVideoId=String(body.source_video_id||"").trim();
+  const forceReprocess=body.force_reprocess===true;
+  const versionLabel=clip(String(body.version_label||"").trim(),12);
   if(!seriesId||!sourceVideoId)throw new Error("series_id_and_source_video_id_required");
   const {series,item}=await loadSeriesItem(db,seriesId,sourceVideoId);
   const ev=await db.from("videos").select("id,status,youtube_video_id").eq("source_id",series.source_id).eq("source_video_id",sourceVideoId).maybeSingle();
   if(ev.error)throw new Error("existing_video_lookup_failed:"+ev.error.message);
-  if(ev.data?.youtube_video_id)return Response.json({ok:true,stage:"already_uploaded",video:ev.data});
+  if(ev.data?.youtube_video_id&&!forceReprocess)return Response.json({ok:true,stage:"already_uploaded",video:ev.data});
   const active=await db.from("longform_jobs").select("id,state,stage,heartbeat_at,expires_at").eq("series_id",seriesId)
     .eq("source_video_id",sourceVideoId).in("state",["created","running"]).order("created_at",{ascending:false}).limit(1).maybeSingle();
   if(active.error)throw new Error("active_job_lookup_failed:"+active.error.message);
@@ -149,7 +151,9 @@ async function start(req:Request,db:any,body:any){
     },{status:409});
   }
   const playlistId=await ensurePlaylist(db,yt.token,series);
-  const ep=Number(item.episode_number||1), title=clip("Tập "+ep+" | "+String(series.playlist_title||series.series_title),100);
+  const ep=Number(item.episode_number||1);
+  const prefix=versionLabel?versionLabel+" - ":"";
+  const title=clip(prefix+"Tập "+ep+" | "+String(series.playlist_title||series.series_title),100);
   const src=await db.from("sources").select("name").eq("id",series.source_id).single();
   if(src.error)throw new Error("source_lookup_failed:"+src.error.message);
   const description=clip(["Bộ: "+String(series.playlist_title||series.series_title),"Tập: "+ep,"",
@@ -181,6 +185,7 @@ async function start(req:Request,db:any,body:any){
   if(vr.error)throw new Error("video_job_save_failed:"+vr.error.message);
   return Response.json({ok:true,stage:"job_created",job_id:id,job_token:token,callback_base:CALLBACK_BASE,
     input_audio_upload_url:inputUpload.data.signedUrl,playlist_id:playlistId,episode_number:ep,
+    force_reprocess:forceReprocess,version_label:versionLabel||null,
     channel_id:yt.connection.channel_id,channel_title:yt.connection.channel_title});
 }
 async function workerConfig(req:Request,db:any,body:any){
