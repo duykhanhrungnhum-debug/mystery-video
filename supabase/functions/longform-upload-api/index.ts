@@ -213,14 +213,16 @@ async function aiComplete(req:Request,db:any,body:any){
   const check=await db.storage.from("video-ingest").list(folder,{limit:20});
   if(check.error)throw new Error("worker_output_check_failed:"+check.error.message);
   const names=new Set((check.data||[]).map((x:any)=>String(x.name)));
-  for(const required of ["voice.mp3","vi.srt","metadata.json"]){
+  const voiceGenerated=body.voice_generated!==false;
+  const requiredFiles=voiceGenerated?["voice.mp3","vi.srt","metadata.json"]:["vi.srt","metadata.json"];
+  for(const required of requiredFiles){
     if(!names.has(required))throw new Error("worker_output_missing:"+required);
   }
   const now=new Date().toISOString();
   const translatedTitle=clip(String(body.translated_title||""),200);
   const sha=clip(String(body.output_sha256||""),128);
   const bytes=Number(body.output_bytes||0);
-  const u=await db.from("longform_jobs").update({state:"running",stage:"ai_ready",message:"AI processing complete; ready for mux/upload",
+  const u=await db.from("longform_jobs").update({state:"running",stage:"ai_ready",message:voiceGenerated?"AI processing complete; ready for mux/upload":"AI translation complete; ready for CPU voice render",
     heartbeat_at:now,translated_title:translatedTitle||null,output_sha256:sha||null,output_bytes:Number.isFinite(bytes)&&bytes>0?bytes:null})
     .eq("id",id).select("id,state,stage,message,heartbeat_at,translated_title,output_sha256,output_bytes").single();
   if(u.error)throw new Error("ai_complete_update_failed:"+u.error.message);
