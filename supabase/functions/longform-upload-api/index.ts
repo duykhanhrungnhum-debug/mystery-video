@@ -247,6 +247,29 @@ async function complete(req:Request,db:any,body:any){
   if(j.error)throw new Error("job_complete_update_failed:"+j.error.message);
   return Response.json({ok:true,stage:"uploaded",video:v.data,job:j.data,playlist_id:playlistId});
 }
+async function channelStatus(req:Request,db:any){
+  await authorizeGitHub(req);
+  const yt=await youtubeAccess(db);
+  const url=new URL("https://www.googleapis.com/youtube/v3/channels");
+  url.searchParams.set("part","status,snippet");
+  url.searchParams.set("mine","true");
+  const r=await fetch(url,{headers:{authorization:"Bearer "+yt.token}});
+  const b=await r.json();
+  if(!r.ok)throw new Error("youtube_channel_status_failed:"+r.status+":"+JSON.stringify(b));
+  const item=Array.isArray(b.items)?b.items[0]:null;
+  if(!item)return Response.json({ok:true,exists:false});
+  return Response.json({
+    ok:true,
+    exists:true,
+    channel_id:item.id||null,
+    channel_title:item?.snippet?.title||null,
+    privacy_status:item?.status?.privacyStatus||null,
+    long_uploads_status:item?.status?.longUploadsStatus||null,
+    is_linked:item?.status?.isLinked??null,
+    made_for_kids:item?.status?.madeForKids??null,
+    self_declared_made_for_kids:item?.status?.selfDeclaredMadeForKids??null
+  });
+}
 async function videoStatus(req:Request,db:any,body:any){
   await authorizeGitHub(req);
   const id=String(body.youtube_video_id||"").trim();
@@ -303,6 +326,7 @@ Deno.serve(async(req:Request)=>{
     if(path.endsWith("/ai-complete"))return await aiComplete(req,db,body);
     if(path.endsWith("/fail"))return await fail(req,db,body);
     if(path.endsWith("/result"))return await result(req,db,body);
+    if(path.endsWith("/channel-status"))return await channelStatus(req,db);
     if(path.endsWith("/video-status"))return await videoStatus(req,db,body);
     if(path.endsWith("/complete"))return await complete(req,db,body);
     if(path.endsWith("/status"))return await status(req,db,body);
