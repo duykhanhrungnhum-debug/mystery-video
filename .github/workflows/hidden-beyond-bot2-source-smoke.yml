@@ -1,0 +1,32 @@
+name: Hidden Beyond Bot2 Source Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/bot2-source-smoke.trigger"
+
+permissions:
+  contents: read
+
+jobs:
+  source-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install downloader
+        run: |
+          python -m pip install --quiet "yt-dlp>=2026.1"
+
+      - name: Test next fixed-source video without GPU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          URL="https://www.youtube.com/watch?v=z56-Xzl-fkY"
+          python -m yt_dlp             --no-playlist             --retries 2             --fragment-retries 2             --download-sections "*0-20"             -f "b[height<=480]/b"             --merge-output-format mp4             -o source-smoke.mp4             "$URL"
+          test -s source-smoke.mp4
+          echo "BOT2_SOURCE_SMOKE_OK bytes=$(stat -c%s source-smoke.mp4)"
