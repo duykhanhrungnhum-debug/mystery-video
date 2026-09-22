@@ -48,7 +48,7 @@ def main() -> None:
         "callback_base":job["callback_base"],
         "source_video_id":video_id,
         "gpu_kernel_ref":gpu_ref,
-        "mounted_source_glob":f"/kaggle/input/{source_slug}/source.mp4",
+        "mounted_source_glob":"/kaggle/input/**/source.mp4",
         "config":{
             "source_video_id":video_id,
             "series_id":int(job["series"]["id"]),
