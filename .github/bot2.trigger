@@ -1,5 +1,6 @@
-run=2026-09-22T19:35:00+07:00
+run=2026-09-22T20:49:00+07:00
 mode=production
 source_rotation=1
 episode=1
-resume=verified-source-after-mount-fix
+rebuild=v2-context-sync-ngoc-linh
+reuse_source=true
