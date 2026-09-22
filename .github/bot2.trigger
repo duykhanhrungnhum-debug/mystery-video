@@ -1,6 +1,6 @@
-run=2026-09-22T20:49:00+07:00
+run=2026-09-22T21:15:00+07:00
 mode=production
 source_rotation=1
 episode=1
-rebuild=v2-context-sync-ngoc-linh
+resume=translation-repair-fix
 reuse_source=true
