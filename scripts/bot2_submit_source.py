@@ -132,8 +132,10 @@ def main() -> None:
     kernel_ref=f"{os.environ.get('KAGGLE_USERNAME','duykhanhta')}/{slug}"
     worker=build_worker(job,kernel_ref)
     client=KaggleClient(
-        token=os.environ["KAGGLE_API_TOKEN"],
+        token=os.environ.get("KAGGLE_API_TOKEN",""),
         username=os.environ.get("KAGGLE_USERNAME","duykhanhta"),
+        broker_url=os.environ.get("BOT2_KAGGLE_BROKER_URL",""),
+        broker_token=os.environ.get("BOT2_KAGGLE_BROKER_TOKEN",""),
     )
     sub=client.submit_script(
         slug=slug,
