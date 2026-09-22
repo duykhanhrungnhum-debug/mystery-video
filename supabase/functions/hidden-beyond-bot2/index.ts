@@ -106,7 +106,21 @@ async function youtubeAccess(db:any){
   return {token:String(b.access_token),connection:q.data};
 }
 async function ensurePlaylist(db:any,token:string,series:any){
-  if(series.youtube_playlist_id) return String(series.youtube_playlist_id);
+  if(series.youtube_playlist_id){
+    const existingId=String(series.youtube_playlist_id);
+    const check=await fetch(
+      "https://www.googleapis.com/youtube/v3/playlists?part=id&id="+encodeURIComponent(existingId),
+      {headers:{authorization:"Bearer "+token}}
+    );
+    const body=await check.json().catch(()=>({}));
+    if(check.ok && Array.isArray(body?.items) && body.items.length>0) return existingId;
+    if(!check.ok && check.status!==404)
+      throw new Error("playlist_verify_failed:"+check.status+":"+JSON.stringify(body));
+    const clear=await db.from("source_series").update({
+      youtube_playlist_id:null,updated_at:new Date().toISOString()
+    }).eq("id",series.id);
+    if(clear.error) throw new Error("playlist_clear_stale_failed:"+clear.error.message);
+  }
   const title=clip(series.playlist_title||series.series_title||"Hidden Beyond",150);
   const r=await fetch("https://www.googleapis.com/youtube/v3/playlists?part=snippet,status",{
     method:"POST",
