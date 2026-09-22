@@ -1,6 +1,6 @@
-run=2026-09-22T21:15:00+07:00
-mode=production
+run=2026-09-22T21:53:00+07:00
+mode=recover-upload
 source_rotation=1
 episode=1
-resume=translation-repair-fix
 reuse_source=true
+no_gpu=true
