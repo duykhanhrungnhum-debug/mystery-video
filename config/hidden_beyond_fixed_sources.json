@@ -1,0 +1,49 @@
+{
+  "bot_version": "bot2-simple",
+  "discover_new_sources": false,
+  "rotation_mode": "1-2-3-4-5-repeat",
+  "no_new_episode_action": "move_to_next_source",
+  "episode_policy": "start_at_episode_1_then_continue_sequentially",
+  "sources": [
+    {
+      "rotation_order": 1,
+      "source_id": 29,
+      "series_id": 2,
+      "channel_name": "伊伊動漫",
+      "channel_url": "https://www.youtube.com/channel/UC1OiBb6ueh8_oe6b8jsYfzA",
+      "series_title": "誰讓這個文盲修仙的"
+    },
+    {
+      "rotation_order": 2,
+      "source_id": 30,
+      "series_id": 3,
+      "channel_name": "Chibi Succubus小不點魅磨",
+      "channel_url": "https://www.youtube.com/channel/UCcE6JHycML1AymdKBUfqxmw",
+      "series_title": "被迫收下的徒弟竟然成了通天大帝"
+    },
+    {
+      "rotation_order": 3,
+      "source_id": 31,
+      "series_id": 4,
+      "channel_name": "时光动漫社",
+      "channel_url": "https://www.youtube.com/channel/UCNrAnwbmtzVwgyRHzvMxL3w",
+      "series_title": "种出全星际净土"
+    },
+    {
+      "rotation_order": 4,
+      "source_id": 32,
+      "series_id": 5,
+      "channel_name": "贫道爱乱来沙雕剧场",
+      "channel_url": "https://www.youtube.com/channel/UCstUf0tnKCCU5E9puvOHA7g",
+      "series_title": "前往濒亡世界，拯救客户活过天灾"
+    },
+    {
+      "rotation_order": 5,
+      "source_id": 33,
+      "series_id": 6,
+      "channel_name": "生活三字经《看听读》",
+      "channel_url": "https://www.youtube.com/channel/UCt-ZyeaZ2FLNRgZ4mWaZ74A",
+      "series_title": "无敌修仙"
+    }
+  ]
+}
