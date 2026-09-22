@@ -1,0 +1,85 @@
+name: Hidden Beyond Bot2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/bot2.trigger"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hidden-beyond-bot2
+  cancel-in-progress: false
+
+jobs:
+  bot2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BOT2_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/hidden-beyond-bot2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify fixed five-source configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          import json
+          d=json.load(open("config/hidden_beyond_fixed_sources.json",encoding="utf-8"))
+          sources=d.get("sources") or []
+          assert d.get("discover_new_sources") is False
+          assert len(sources)==5
+          assert [x["rotation_order"] for x in sources]==[1,2,3,4,5]
+          assert [x["source_id"] for x in sources]==[29,30,31,32,33]
+          print("BOT2_FIXED_SOURCES_OK")
+          PY
+
+      - name: Read Bot2 state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2"             | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          curl --fail-with-body -sS -X POST "$BOT2_API/status"             -H "Authorization: Bearer $OIDC"             -H "content-type: application/json"             -d '{}' > bot2-status.json
+          cat bot2-status.json
+
+      - name: Peek next fixed-source episode without claiming
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2"             | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          curl --fail-with-body -sS -X POST "$BOT2_API/peek"             -H "Authorization: Bearer $OIDC"             -H "content-type: application/json"             -d '{}' > bot2-peek.json
+          cat bot2-peek.json
+          STAGE="$(python -c 'import json; print(json.load(open("bot2-peek.json")).get("stage",""))')"
+          if [ "$STAGE" = "ready" ]; then
+            python - <<'PY'
+          import json
+          d=json.load(open("bot2-peek.json",encoding="utf-8"))
+          print("BOT2_NEXT_READY",
+                "rotation="+str(d["rotation"]),
+                "source_id="+str(d["item"]["source_id"]),
+                "episode="+str(d["item"]["episode_number"]),
+                "video_id="+str(d["item"]["source_item_id"]))
+          PY
+          elif [ "$STAGE" = "idle" ]; then
+            echo "BOT2_IDLE_NO_PENDING_EPISODE"
+          else
+            echo "Unexpected Bot2 peek stage: $STAGE"
+            exit 1
+          fi
+
+      - name: Preserve bootstrap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidden-beyond-bot2-bootstrap
+          path: |
+            bot2-status.json
+            bot2-peek.json
+          if-no-files-found: warn
+          retention-days: 7
