@@ -60,6 +60,7 @@ jobs:
           STAGE="$(python -c 'import json; print(json.load(open("bot2-job.json")).get("stage",""))')"
           if [ "$STAGE" = "idle" ]; then
             echo "run_job=false" >> "$GITHUB_OUTPUT"
+            echo "reuse_source=false" >> "$GITHUB_OUTPUT"
             echo "BOT2_IDLE"
             exit 0
           fi
@@ -67,9 +68,32 @@ jobs:
             echo "::error title=Bot2 job already active::A previous episode is still active."
             exit 3
           fi
-          test "$STAGE" = "selected"
-          echo "run_job=true" >> "$GITHUB_OUTPUT"
-          python - <<'PY'
+          if [ "$STAGE" = "resume_source_ready" ]; then
+            echo "run_job=true" >> "$GITHUB_OUTPUT"
+            echo "reuse_source=true" >> "$GITHUB_OUTPUT"
+            python - <<'PY'
+          import json
+          d=json.load(open("bot2-job.json",encoding="utf-8"))
+          ref=str(d.get("source_kernel_ref") or "")
+          size=int(d.get("source_bytes") or 0)
+          if not ref or size <= 1_000_000:
+              raise SystemExit("verified source missing during resume")
+          open("source-kernel-ref.txt","w",encoding="utf-8").write(ref+"\n")
+          print(
+              "BOT2_RESUME_SOURCE",
+              "rotation="+str(d["rotation"]),
+              "source_id="+str(d["item"]["source_id"]),
+              "series_id="+str(d["item"]["series_id"]),
+              "episode="+str(d["item"]["episode_number"]),
+              "video_id="+str(d["item"]["source_item_id"]),
+              "bytes="+str(size),
+          )
+          PY
+          else
+            test "$STAGE" = "selected"
+            echo "run_job=true" >> "$GITHUB_OUTPUT"
+            echo "reuse_source=false" >> "$GITHUB_OUTPUT"
+            python - <<'PY'
           import json
           d=json.load(open("bot2-job.json",encoding="utf-8"))
           print(
@@ -81,9 +105,10 @@ jobs:
               "video_id="+str(d["item"]["source_item_id"]),
           )
           PY
+          fi
 
       - name: Submit CPU source job
-        if: steps.claim.outputs.run_job == 'true'
+        if: steps.claim.outputs.run_job == 'true' && steps.claim.outputs.reuse_source != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -101,7 +126,7 @@ jobs:
           fi
 
       - name: Wait for verified source
-        if: steps.claim.outputs.run_job == 'true'
+        if: steps.claim.outputs.run_job == 'true' && steps.claim.outputs.reuse_source != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
