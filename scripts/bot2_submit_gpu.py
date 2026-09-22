@@ -62,8 +62,10 @@ def main() -> None:
     worker=fetch_ai_worker().replace("# __JOB_CONFIG_INJECT__","JOB="+repr(runtime),1)
 
     client=KaggleClient(
-        token=os.environ["KAGGLE_API_TOKEN"],
+        token=os.environ.get("KAGGLE_API_TOKEN",""),
         username=os.environ.get("KAGGLE_USERNAME","duykhanhta"),
+        broker_url=os.environ.get("BOT2_KAGGLE_BROKER_URL",""),
+        broker_token=os.environ.get("BOT2_KAGGLE_BROKER_TOKEN",""),
     )
     sub=client.submit_script(
         slug=gpu_slug,
