@@ -1,0 +1,271 @@
+name: Hidden Beyond Bot2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/bot2.trigger"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hidden-beyond-bot2
+  cancel-in-progress: false
+
+jobs:
+  process-one-episode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BOT2_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/hidden-beyond-bot2
+      BOT2_KAGGLE_BROKER_URL: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/hidden-beyond-kaggle-broker
+      KAGGLE_USERNAME: duykhanhta
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Bot2 controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --quiet -e .
+
+      - name: Preflight configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${BOT2_KAGGLE_BROKER_URL:-}" || {
+            echo "::error title=Bot2 Kaggle broker missing::BOT2_KAGGLE_BROKER_URL is not configured."
+            exit 2
+          }
+          echo "BOT2_PREFLIGHT_OK kaggle_auth=AI_to_Supabase_Vault_broker"
+
+      - name: Claim exactly one fixed-source episode
+        id: claim
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          get_oidc() {
+            curl -fsSL               -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2"               | python -c 'import json,sys; print(json.load(sys.stdin)["value"])'
+          }
+          OIDC="$(get_oidc)"
+          curl --fail-with-body --retry 3 --retry-all-errors -sS -X POST "$BOT2_API/next"             -H "Authorization: Bearer $OIDC"             -H "content-type: application/json"             -d '{}' > bot2-job.json
+          STAGE="$(python -c 'import json; print(json.load(open("bot2-job.json")).get("stage",""))')"
+          if [ "$STAGE" = "idle" ]; then
+            echo "run_job=false" >> "$GITHUB_OUTPUT"
+            echo "BOT2_IDLE"
+            exit 0
+          fi
+          if [ "$STAGE" = "job_active" ]; then
+            echo "::error title=Bot2 job already active::A previous episode is still active."
+            exit 3
+          fi
+          test "$STAGE" = "selected"
+          echo "run_job=true" >> "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import json
+          d=json.load(open("bot2-job.json",encoding="utf-8"))
+          print(
+              "BOT2_SELECTED",
+              "rotation="+str(d["rotation"]),
+              "source_id="+str(d["item"]["source_id"]),
+              "series_id="+str(d["item"]["series_id"]),
+              "episode="+str(d["item"]["episode_number"]),
+              "video_id="+str(d["item"]["source_item_id"]),
+          )
+          PY
+
+      - name: Submit CPU source job
+        if: steps.claim.outputs.run_job == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          VIDEO_ID="$(python -c 'import json; print(json.load(open("bot2-job.json"))["item"]["source_item_id"])')"
+          BROKER_OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-kaggle-broker" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          export BOT2_KAGGLE_BROKER_TOKEN="$BROKER_OIDC"
+          if ! python scripts/bot2_submit_source.py --job bot2-job.json; then
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            python - "$VIDEO_ID" <<'PY' > fail.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1],"stage":"source_submit","error":"Kaggle CPU source submission failed"}))
+          PY
+            curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
+            exit 1
+          fi
+
+      - name: Wait for verified source
+        if: steps.claim.outputs.run_job == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          VIDEO_ID="$(python -c 'import json; print(json.load(open("bot2-job.json"))["item"]["source_item_id"])')"
+          READY=0
+          for i in $(seq 1 90); do
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            curl --fail-with-body --retry 2 --retry-all-errors -sS -X POST "$BOT2_API/status"               -H "Authorization: Bearer $OIDC" -H "content-type: application/json" -d '{}' > bot2-status.json
+            STATE="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d["status"])')"
+            STAGE="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d["stage"])')"
+            MSG="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d.get("last_message") or "")')"
+            echo "BOT2_SOURCE_PROGRESS poll=$i state=$STATE stage=$STAGE message=$MSG"
+            if [ "$STATE" = "failed" ]; then
+              echo "::error title=Bot2 source failed::$STAGE / $MSG"
+              exit 1
+            fi
+            if [ "$STAGE" = "source_ready" ]; then
+              SOURCE_REF="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d.get("source_kernel_ref") or "")')"
+              SOURCE_BYTES="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d.get("source_bytes") or 0)')"
+              test -n "$SOURCE_REF"
+              test "$SOURCE_BYTES" -gt 1000000
+              echo "$SOURCE_REF" > source-kernel-ref.txt
+              echo "BOT2_SOURCE_READY ref=$SOURCE_REF bytes=$SOURCE_BYTES"
+              READY=1
+              break
+            fi
+            sleep 20
+          done
+          if [ "$READY" != "1" ]; then
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            python - "$VIDEO_ID" <<'PY' > fail.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1],"stage":"source_timeout","error":"Source did not become ready within 30 minutes"}))
+          PY
+            curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
+            exit 1
+          fi
+          # Source callback happens just before the Kaggle CPU kernel exits.
+          # Give Kaggle a bounded publish window before mounting its output.
+          sleep 60
+
+      - name: Create YouTube Public upload session
+        if: steps.claim.outputs.run_job == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          VIDEO_ID="$(python -c 'import json; print(json.load(open("bot2-job.json"))["item"]["source_item_id"])')"
+          OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python - "$VIDEO_ID" <<'PY' > youtube-request.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1]}))
+          PY
+          if ! curl --fail-with-body --retry 3 --retry-all-errors -sS -X POST "$BOT2_API/youtube-session"             -H "Authorization: Bearer $OIDC" -H "content-type: application/json"             --data-binary @youtube-request.json > youtube-session.json; then
+            python - "$VIDEO_ID" <<'PY' > fail.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1],"stage":"youtube_session","error":"Could not create YouTube resumable session"}))
+          PY
+            curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
+            exit 1
+          fi
+          test "$(python -c 'import json; print(json.load(open("youtube-session.json")).get("stage",""))')" = "youtube_upload_ready"
+          echo "BOT2_YOUTUBE_SESSION_READY"
+
+      - name: Submit mounted-source GPU AI job
+        if: steps.claim.outputs.run_job == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          VIDEO_ID="$(python -c 'import json; print(json.load(open("bot2-job.json"))["item"]["source_item_id"])')"
+          SOURCE_REF="$(cat source-kernel-ref.txt)"
+          BROKER_OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-kaggle-broker" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          export BOT2_KAGGLE_BROKER_TOKEN="$BROKER_OIDC"
+          if ! python scripts/bot2_submit_gpu.py             --job bot2-job.json             --youtube-session youtube-session.json             --source-ref "$SOURCE_REF"; then
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            python - "$VIDEO_ID" <<'PY' > fail.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1],"stage":"gpu_submit","error":"Kaggle GPU AI submission failed"}))
+          PY
+            curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
+            exit 1
+          fi
+          GPU_REF="$(python -c 'import json; print(json.load(open("bot2-gpu-submission.json"))["ref"])')"
+          TOKEN="$(python -c 'import json; print(json.load(open("bot2-job.json"))["job_token"])')"
+          python - "$VIDEO_ID" "$GPU_REF" <<'PY' > gpu-stage.json
+          import json,sys
+          print(json.dumps({
+              "source_video_id":sys.argv[1],
+              "stage":"gpu_submitted",
+              "message":"Mounted-source GPU worker submitted",
+              "gpu_kernel_ref":sys.argv[2],
+          }))
+          PY
+          curl --fail-with-body -sS -X POST "$BOT2_API/worker-stage"             -H "x-bot2-token: $TOKEN" -H "content-type: application/json"             --data-binary @gpu-stage.json > /dev/null
+          echo "BOT2_GPU_SUBMITTED ref=$GPU_REF"
+
+      - name: Follow AI, TTS, mix and YouTube upload
+        if: steps.claim.outputs.run_job == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DONE=0
+          for i in $(seq 1 180); do
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            curl --fail-with-body --retry 2 --retry-all-errors -sS -X POST "$BOT2_API/status"               -H "Authorization: Bearer $OIDC" -H "content-type: application/json" -d '{}' > bot2-status.json
+            STATE="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d["status"])')"
+            STAGE="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d["stage"])')"
+            MSG="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d.get("last_message") or "")')"
+            echo "BOT2_PROGRESS poll=$i state=$STATE stage=$STAGE message=$MSG"
+            if [ "$STATE" = "failed" ]; then
+              echo "::error title=Bot2 stopped::$STAGE / $MSG"
+              exit 1
+            fi
+            if [ "$STATE" = "idle" ] && [ "$STAGE" = "completed" ]; then
+              YT_ID="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d.get("youtube_video_id") or "")')"
+              test -n "$YT_ID"
+              echo "BOT2_COMPLETED youtube_video_id=$YT_ID"
+              DONE=1
+              break
+            fi
+            sleep 30
+          done
+          if [ "$DONE" != "1" ]; then
+            VIDEO_ID="$(python -c 'import json; print(json.load(open("bot2-job.json"))["item"]["source_item_id"])')"
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            python - "$VIDEO_ID" <<'PY' > fail.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1],"stage":"processing_timeout","error":"GPU processing did not finish within 90 minutes"}))
+          PY
+            curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
+            exit 1
+          fi
+
+      - name: Preserve compact evidence
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          out={"bot":"Hidden Beyond Bot2"}
+          try:
+              d=json.load(open("bot2-status.json",encoding="utf-8"))
+              out["state"]=d.get("state")
+              if isinstance(out["state"],dict):
+                  out["state"].pop("job_token_hash",None)
+          except Exception:
+              pass
+          try:
+              d=json.load(open("bot2-job.json",encoding="utf-8"))
+              out["selected"]={
+                  "rotation":d.get("rotation"),
+                  "source_id":(d.get("item") or {}).get("source_id"),
+                  "series_id":(d.get("item") or {}).get("series_id"),
+                  "source_video_id":(d.get("item") or {}).get("source_item_id"),
+                  "episode_number":(d.get("item") or {}).get("episode_number"),
+              }
+          except Exception:
+              pass
+          json.dump(out,open("bot2-evidence.json","w",encoding="utf-8"),ensure_ascii=False,indent=2)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hidden-beyond-bot2-evidence
+          path: bot2-evidence.json
+          if-no-files-found: warn
+          retention-days: 7
