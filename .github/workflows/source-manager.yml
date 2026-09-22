@@ -5,8 +5,6 @@ on:
     branches: [main]
     paths:
       - ".github/source-manager.trigger"
-  schedule:
-    - cron: "23 2 * * *"
   workflow_dispatch:
 
 permissions:
@@ -26,44 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Search Creative Commons candidates through YouTube Data API
-        shell: bash
+      - name: Fixed source pool only
         run: |
-          set -Eeuo pipefail
-          OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-source-manager" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
-          python - <<'PY'
-          import json
-          body={
-            "queries":[
-              "原创动画 修仙 一口气看完",
-              "原创沙雕动画 修仙 合集",
-              "自制动画 修仙 系统 合集",
-              "AI原创动画 修仙 一口气看完",
-              "漫剧 原创 修仙 合集",
-              "沙雕动画 穿越 系统 原创",
-              "原创动态漫画 玄幻 合集",
-              "原创动画 重生 系统 一口气看完"
-            ],
-            "per_query":10,
-            "duration_filters":["long"]
-          }
-          json.dump(body,open("source-audit-request.json","w",encoding="utf-8"),ensure_ascii=False)
-          PY
-          curl -fsSL -X POST "$SOURCE_AUDIT_API"             -H "Authorization: Bearer $OIDC"             -H "Content-Type: application/json"             --data-binary @source-audit-request.json > source-audit-response.json
-          cat source-audit-response.json
-          python - <<'PY'
-          import json
-          d=json.load(open("source-audit-response.json",encoding="utf-8"))
-          assert d.get("ok") is True, d
-          assert str(d.get("mode","")).startswith("youtube-data-api-creative-commons-search"), d
-          print(
-            "SOURCE_MANAGER_OK",
-            "discovered="+str(d.get("discovered_unique",0)),
-            "cc_candidates="+str(d.get("cc_candidate_count",0)),
-            "search_errors="+str(len(d.get("search_errors") or [])),
-            "bot_search=false"
-          )
-          PY
+          echo "SOURCE_DISCOVERY_DISABLED"
+          echo "Bot may use only the fixed 5-source pool already approved in Supabase."
 
       - name: Upload source-manager evidence
         uses: actions/upload-artifact@v4
