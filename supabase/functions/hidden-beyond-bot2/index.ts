@@ -38,6 +38,33 @@ async function loadState(db:any){
   return q.data;
 }
 
+async function peekNext(db:any,state:any){
+  const start=Number(state.next_rotation||1);
+  for(let offset=0;offset<5;offset++){
+    const rotation=((start-1+offset)%5)+1;
+    const fixed=FIXED.find(x=>x.rotation===rotation)!;
+    const sq=await db.from("source_series")
+      .select("id,source_id,series_title,playlist_title,last_ingested_episode,active,state")
+      .eq("id",fixed.series_id).single();
+    if(sq.error) throw new Error("series_lookup_failed:"+sq.error.message);
+    if(!sq.data.active) continue;
+    const last=Number(sq.data.last_ingested_episode||0);
+    const iq=await db.from("source_items")
+      .select("source_id,series_id,source_item_id,source_url,title,series_title,episode_number,rights_status,rights_basis,evidence_url")
+      .eq("source_id",fixed.source_id)
+      .eq("series_id",fixed.series_id)
+      .eq("active",true)
+      .eq("rights_status","approved")
+      .gt("episode_number",last)
+      .order("episode_number",{ascending:true})
+      .limit(1)
+      .maybeSingle();
+    if(iq.error) throw new Error("source_item_lookup_failed:"+iq.error.message);
+    if(iq.data) return {stage:"ready",rotation,series:sq.data,item:iq.data};
+  }
+  return {stage:"idle"};
+}
+
 async function selectNext(db:any,state:any){
   if(state.status==="running" && state.current_source_video_id){
     const age=(Date.now()-new Date(String(state.updated_at)).getTime())/1000;
@@ -112,6 +139,11 @@ Deno.serve(async(req:Request)=>{
 
     if(path.endsWith("/status")){
       return Response.json({ok:true,state:await loadState(db)});
+    }
+
+    if(path.endsWith("/peek")){
+      const state=await loadState(db);
+      return Response.json({ok:true,...await peekNext(db,state)});
     }
 
     if(path.endsWith("/next")){
