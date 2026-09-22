@@ -283,6 +283,21 @@ Deno.serve(async(req:Request)=>{
 
     await authorizeGitHub(req);
 
+    if(path.endsWith("/config-fail")){
+      const now=new Date().toISOString();
+      const message=clip(body.error||body.message||"Bot2 configuration blocked",1500);
+      const u=await db.from("hidden_beyond_bot2_state").update({
+        status:"idle",stage:"config_blocked",
+        current_source_id:null,current_series_id:null,current_source_video_id:null,
+        source_kernel_ref:null,source_bytes:null,gpu_kernel_ref:null,
+        job_token_hash:null,job_expires_at:null,
+        started_at:null,completed_at:now,
+        last_message:message,updated_at:now
+      }).eq("id",1).select("*").single();
+      if(u.error) throw new Error("config_fail_update_failed:"+u.error.message);
+      return Response.json({ok:true,stage:"config_blocked",state:u.data});
+    }
+
     if(path.endsWith("/status")) return Response.json({ok:true,state:await loadState(db)});
     if(path.endsWith("/peek")){
       const state=await loadState(db);
