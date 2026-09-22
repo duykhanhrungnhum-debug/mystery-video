@@ -160,6 +160,18 @@ async function peekNext(db:any,state:any){
 async function selectNext(db:any,state:any){
   if(
     state.status==="failed" &&
+    state.stage==="youtube_uploaded" &&
+    state.current_source_video_id
+  ){
+    return {
+      stage:"recover_upload",
+      source_id:state.current_source_id,
+      series_id:state.current_series_id,
+      source_video_id:state.current_source_video_id
+    };
+  }
+  if(
+    state.status==="failed" &&
     state.current_source_video_id &&
     state.source_kernel_ref &&
     Number(state.source_bytes||0)>1_000_000
@@ -228,6 +240,54 @@ async function selectNext(db:any,state:any){
   if(u.error) throw new Error("state_claim_failed:"+u.error.message);
   return {stage:"selected",rotation:next.rotation,series:next.series,item:next.item};
 }
+async function recoverRecentUpload(db:any,state:any){
+  const videoId=String(state.current_source_video_id||"");
+  const fixed=FIXED.find(x=>x.source_id===Number(state.current_source_id)&&x.series_id===Number(state.current_series_id));
+  if(!videoId||!fixed) throw new Error("recover_job_context_missing");
+
+  const iq=await db.from("source_items")
+    .select("source_item_id,title,episode_number")
+    .eq("series_id",fixed.series_id).eq("source_item_id",videoId).single();
+  if(iq.error) throw new Error("recover_source_item_lookup_failed:"+iq.error.message);
+
+  const sq=await db.from("source_series")
+    .select("id,series_title,playlist_title")
+    .eq("id",fixed.series_id).single();
+  if(sq.error) throw new Error("recover_series_lookup_failed:"+sq.error.message);
+
+  const yt=await youtubeAccess(db);
+  const channelId=String(yt.connection.channel_id||"").trim();
+  if(!channelId) throw new Error("recover_channel_id_missing");
+
+  const ch=await fetch("https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id="+encodeURIComponent(channelId),{
+    headers:{authorization:"Bearer "+yt.token}
+  });
+  const chBody=await ch.json().catch(()=>({}));
+  if(!ch.ok) throw new Error("recover_channels_lookup_failed:"+ch.status+":"+JSON.stringify(chBody));
+  const uploads=String(chBody?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads||"");
+  if(!uploads) throw new Error("recover_uploads_playlist_missing");
+
+  const ep=Number(iq.data.episode_number||1);
+  const expectedTitle=clip("Tập "+ep+" | "+String(sq.data.playlist_title||sq.data.series_title||iq.data.title||"Hidden Beyond"),100);
+  const pr=await fetch(
+    "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&maxResults=15&playlistId="+encodeURIComponent(uploads),
+    {headers:{authorization:"Bearer "+yt.token}}
+  );
+  const pb=await pr.json().catch(()=>({}));
+  if(!pr.ok) throw new Error("recover_uploads_lookup_failed:"+pr.status+":"+JSON.stringify(pb));
+  const started=new Date(String(state.started_at||state.updated_at||new Date().toISOString())).getTime()-15*60*1000;
+  const candidates=(pb.items||[]).filter((x:any)=>{
+    const title=String(x?.snippet?.title||"");
+    const published=new Date(String(x?.contentDetails?.videoPublishedAt||x?.snippet?.publishedAt||0)).getTime();
+    return title===expectedTitle && Number.isFinite(published) && published>=started;
+  });
+  if(candidates.length<1) throw new Error("recover_recent_upload_not_found:title="+expectedTitle);
+  const found=candidates[0];
+  const recoveredId=String(found?.contentDetails?.videoId||found?.snippet?.resourceId?.videoId||"").trim();
+  if(!recoveredId) throw new Error("recover_video_id_missing");
+  return {youtube_video_id:recoveredId,title:expectedTitle};
+}
+
 async function completeJob(db:any,state:any,youtubeVideoId:string){
   const videoId=String(state.current_source_video_id||"");
   const fixed=FIXED.find(x=>x.source_id===Number(state.current_source_id)&&x.series_id===Number(state.current_series_id));
@@ -319,6 +379,31 @@ Deno.serve(async(req:Request)=>{
     }
 
     await authorizeGitHub(req);
+
+    if(path.endsWith("/recover-upload")){
+      const state=await loadState(db);
+      if(state.status!=="failed"||state.stage!=="youtube_uploaded"||!state.current_source_video_id)
+        return Response.json({ok:false,error:"recover_not_applicable"},{status:409});
+      try{
+        const recovered=await recoverRecentUpload(db,state);
+        await db.from("hidden_beyond_bot2_state").update({
+          status:"running",stage:"youtube_uploaded",
+          youtube_video_id:recovered.youtube_video_id,
+          last_message:"Recovered already-uploaded YouTube video id="+recovered.youtube_video_id,
+          completed_at:null,updated_at:new Date().toISOString()
+        }).eq("id",1);
+        const result=await completeJob(db,{...state,status:"running"},recovered.youtube_video_id);
+        return Response.json({ok:true,stage:"completed",recovered:true,...recovered,...result});
+      }catch(err){
+        const message=err instanceof Error?err.message:String(err);
+        await db.from("hidden_beyond_bot2_state").update({
+          status:"failed",stage:"youtube_uploaded",
+          last_message:clip("Recovery completion failed: "+message,1500),
+          completed_at:new Date().toISOString(),updated_at:new Date().toISOString()
+        }).eq("id",1);
+        return Response.json({ok:false,error:message},{status:500});
+      }
+    }
 
     if(path.endsWith("/config-fail")){
       const now=new Date().toISOString();
@@ -440,6 +525,8 @@ Deno.serve(async(req:Request)=>{
     }
     return Response.json({ok:false,error:"unknown_route"},{status:404});
   }catch(e){
-    return Response.json({ok:false,error:e instanceof Error?e.message:String(e)},{status:401});
+    const message=e instanceof Error?e.message:String(e);
+    const authError=/^(missing_bearer|wrong_repository|wrong_ref|wrong_event|wrong_workflow|missing_worker_token|worker_token_not_issued|worker_token_expired|invalid_worker_token|worker_job_mismatch|job_not_running)$/.test(message);
+    return Response.json({ok:false,error:message},{status:authError?401:500});
   }
 });
