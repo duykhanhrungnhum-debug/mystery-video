@@ -68,6 +68,20 @@ jobs:
             echo "::error title=Bot2 job already active::A previous episode is still active."
             exit 3
           fi
+          if [ "$STAGE" = "recover_upload" ]; then
+            curl --fail-with-body -sS -X POST "$BOT2_API/recover-upload" \
+              -H "Authorization: Bearer $OIDC" \
+              -H "content-type: application/json" \
+              -d '{}' > bot2-recover.json
+            python - <<'PY'
+          import json
+          d=json.load(open("bot2-recover.json",encoding="utf-8"))
+          print("BOT2_UPLOAD_RECOVERED", d.get("youtube_video_id",""))
+          PY
+            echo "run_job=false" >> "$GITHUB_OUTPUT"
+            echo "reuse_source=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$STAGE" = "resume_source_ready" ]; then
             echo "run_job=true" >> "$GITHUB_OUTPUT"
             echo "reuse_source=true" >> "$GITHUB_OUTPUT"
