@@ -1,0 +1,33 @@
+{
+  "bot_version": "bot2-simple-v1",
+  "production_repo": "duykhanhrungnhum-debug/mystery-video",
+  "ai_repo": "duykhanhrungnhum-debug/AI-",
+  "source_pool": "config/hidden_beyond_fixed_sources.json",
+  "source_discovery": false,
+  "workflow_count_target": 1,
+  "stages": [
+    "select_fixed_source_episode",
+    "acquire_source_cpu",
+    "verify_source_media",
+    "ai_asr_translate_tts",
+    "mix_preserve_original_visuals",
+    "verify_output",
+    "youtube_upload_public",
+    "advance_rotation"
+  ],
+  "gpu_gate": "source_verified",
+  "translation": {
+    "model": "tencent/Hy-MT2-7B",
+    "passes": 1,
+    "targeted_repair_passes_max": 1
+  },
+  "tts": {
+    "engine": "VieNeu-TTS v3 Turbo",
+    "voice": "Minh Quân Pro"
+  },
+  "retry_policy": {
+    "transient_transport": "bounded",
+    "terminal_logic_error": "stop",
+    "full_episode_rerun_for_single_segment": false
+  }
+}
