@@ -158,6 +158,39 @@ async function peekNext(db:any,state:any){
   return {stage:"idle"};
 }
 async function selectNext(db:any,state:any){
+  if(
+    state.status==="failed" &&
+    state.current_source_video_id &&
+    state.source_kernel_ref &&
+    Number(state.source_bytes||0)>1_000_000
+  ){
+    const fixed=FIXED.find(
+      x=>x.source_id===Number(state.current_source_id)&&x.series_id===Number(state.current_series_id)
+    );
+    if(fixed){
+      const sq=await db.from("source_series")
+        .select("id,source_id,series_title,playlist_title,last_ingested_episode,active,state")
+        .eq("id",fixed.series_id).single();
+      if(sq.error) throw new Error("series_lookup_failed:"+sq.error.message);
+      const iq=await db.from("source_items")
+        .select("source_id,series_id,source_item_id,source_url,title,series_title,episode_number,rights_status,rights_basis,evidence_url")
+        .eq("source_id",fixed.source_id).eq("series_id",fixed.series_id)
+        .eq("source_item_id",String(state.current_source_video_id)).single();
+      if(iq.error) throw new Error("source_item_lookup_failed:"+iq.error.message);
+      const now=new Date().toISOString();
+      const u=await db.from("hidden_beyond_bot2_state").update({
+        status:"running",stage:"source_ready",completed_at:null,youtube_video_id:null,
+        gpu_kernel_ref:null,last_message:"Resuming from previously verified Kaggle source",
+        updated_at:now
+      }).eq("id",1).select("*").single();
+      if(u.error) throw new Error("state_resume_failed:"+u.error.message);
+      return {
+        stage:"resume_source_ready",rotation:fixed.rotation,series:sq.data,item:iq.data,
+        source_kernel_ref:String(state.source_kernel_ref),
+        source_bytes:Number(state.source_bytes||0)
+      };
+    }
+  }
   if(state.status==="running"&&state.current_source_video_id){
     const age=(Date.now()-new Date(String(state.updated_at)).getTime())/1000;
     if(age<7200){
@@ -310,7 +343,8 @@ Deno.serve(async(req:Request)=>{
     if(path.endsWith("/next")){
       const state=await loadState(db);
       const result:any=await selectNext(db,state);
-      if(result.stage!=="selected") return Response.json({ok:true,...result});
+      if(!["selected","resume_source_ready"].includes(String(result.stage)))
+        return Response.json({ok:true,...result});
       const token=randomToken();
       const expires=new Date(Date.now()+4*3600*1000).toISOString();
       const u=await db.from("hidden_beyond_bot2_state").update({
