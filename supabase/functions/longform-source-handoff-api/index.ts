@@ -56,16 +56,14 @@ Deno.serve(async(req:Request)=>{
       const t=token();
       const now=new Date();
       const exp=new Date(now.getTime()+2*3600*1000);
-      const storagePath="source-handoff/"+id+"/source.mp4";
-      const up=await db.storage.from("video-ingest").createSignedUploadUrl(storagePath,{upsert:true});
-      if(up.error||!up.data?.signedUrl)throw new Error("source_upload_signing_failed:"+(up.error?.message||"missing_url"));
+      const storagePath="source-handoff/"+id;
       const ins=await db.from("longform_source_handoffs").insert({
         id,source_video_id:sourceVideoId,token_hash:await sha(t),state:"created",
         message:"waiting_for_kaggle_source",storage_path:storagePath,
         heartbeat_at:now.toISOString(),expires_at:exp.toISOString()
       });
       if(ins.error)throw new Error("handoff_insert_failed:"+ins.error.message);
-      return Response.json({ok:true,handoff_id:id,handoff_token:t,upload_url:up.data.signedUrl});
+      return Response.json({ok:true,handoff_id:id,handoff_token:t});
     }
 
     if(path.endsWith("/heartbeat")){
@@ -79,16 +77,51 @@ Deno.serve(async(req:Request)=>{
       return Response.json({ok:true});
     }
 
+    if(path.endsWith("/prepare-parts")){
+      const id=String(body.handoff_id||""), t=req.headers.get("x-handoff-token")||"";
+      const h=await load(db,id,t);
+      const partCount=Number(body.part_count||0);
+      const totalSize=Number(body.total_size||0);
+      const chunkSize=Number(body.chunk_size||0);
+      if(!Number.isInteger(partCount)||partCount<1||partCount>200)throw new Error("invalid_part_count");
+      if(!Number.isFinite(totalSize)||totalSize<1)throw new Error("invalid_total_size");
+      if(!Number.isFinite(chunkSize)||chunkSize<1||chunkSize>40*1024*1024)throw new Error("invalid_chunk_size");
+      const uploads=[];
+      for(let i=0;i<partCount;i++){
+        const name="part-"+String(i).padStart(5,"0")+".bin";
+        const objectPath=String(h.storage_path)+"/"+name;
+        const up=await db.storage.from("video-ingest").createSignedUploadUrl(objectPath,{upsert:true});
+        if(up.error||!up.data?.signedUrl)throw new Error("part_upload_signing_failed:"+i+":"+(up.error?.message||"missing_url"));
+        uploads.push({index:i,name,upload_url:up.data.signedUrl});
+      }
+      const metadata={
+        ...(h.metadata&&typeof h.metadata==="object"?h.metadata:{}),
+        part_count:partCount,total_size:totalSize,chunk_size:chunkSize
+      };
+      const now=new Date().toISOString();
+      const u=await db.from("longform_source_handoffs").update({
+        state:"running",message:"uploading_source_parts",metadata,heartbeat_at:now
+      }).eq("id",id);
+      if(u.error)throw new Error("prepare_parts_update_failed:"+u.error.message);
+      return Response.json({ok:true,parts:uploads});
+    }
+
     if(path.endsWith("/complete")){
       const id=String(body.handoff_id||""), t=req.headers.get("x-handoff-token")||"";
       const h=await load(db,id,t);
-      const folder=String(h.storage_path).split("/").slice(0,-1).join("/");
-      const list=await db.storage.from("video-ingest").list(folder,{limit:20});
+      const expected=Number(h.metadata?.part_count||0);
+      if(!expected)throw new Error("handoff_parts_not_prepared");
+      const list=await db.storage.from("video-ingest").list(String(h.storage_path),{limit:250});
       if(list.error)throw new Error("handoff_storage_check_failed:"+list.error.message);
-      if(!(list.data||[]).some((x:any)=>String(x.name)==="source.mp4"))throw new Error("handoff_source_missing");
+      const names=new Set((list.data||[]).map((x:any)=>String(x.name)));
+      for(let i=0;i<expected;i++){
+        const name="part-"+String(i).padStart(5,"0")+".bin";
+        if(!names.has(name))throw new Error("handoff_part_missing:"+name);
+      }
       const now=new Date().toISOString();
+      const metadata={...(h.metadata||{}),...(body.metadata||{})};
       const u=await db.from("longform_source_handoffs").update({
-        state:"completed",message:"source_ready",metadata:body.metadata||{},
+        state:"completed",message:"source_ready",metadata,
         heartbeat_at:now,completed_at:now
       }).eq("id",id);
       if(u.error)throw new Error("handoff_complete_failed:"+u.error.message);
@@ -123,9 +156,17 @@ Deno.serve(async(req:Request)=>{
       const q=await db.from("longform_source_handoffs").select("state,storage_path,metadata").eq("id",id).single();
       if(q.error)throw new Error("handoff_download_lookup_failed:"+q.error.message);
       if(String(q.data.state)!=="completed")return Response.json({ok:false,error:"handoff_not_completed",state:q.data.state},{status:409});
-      const dl=await db.storage.from("video-ingest").createSignedUrl(String(q.data.storage_path),3600);
-      if(dl.error||!dl.data?.signedUrl)throw new Error("handoff_download_signing_failed:"+(dl.error?.message||"missing_url"));
-      return Response.json({ok:true,download_url:dl.data.signedUrl,metadata:q.data.metadata||{}});
+      const count=Number(q.data.metadata?.part_count||0);
+      if(!count)throw new Error("handoff_part_count_missing");
+      const parts=[];
+      for(let i=0;i<count;i++){
+        const name="part-"+String(i).padStart(5,"0")+".bin";
+        const objectPath=String(q.data.storage_path)+"/"+name;
+        const dl=await db.storage.from("video-ingest").createSignedUrl(objectPath,3600);
+        if(dl.error||!dl.data?.signedUrl)throw new Error("handoff_download_signing_failed:"+i+":"+(dl.error?.message||"missing_url"));
+        parts.push({index:i,name,download_url:dl.data.signedUrl});
+      }
+      return Response.json({ok:true,parts,metadata:q.data.metadata||{}});
     }
 
     return Response.json({ok:false,error:"unknown_route"},{status:404});
