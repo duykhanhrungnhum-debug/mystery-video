@@ -56,7 +56,7 @@ jobs:
             curl -fsSL               -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2"               | python -c 'import json,sys; print(json.load(sys.stdin)["value"])'
           }
           OIDC="$(get_oidc)"
-          curl --fail-with-body --retry 3 --retry-all-errors -sS -X POST "$BOT2_API/next"             -H "Authorization: Bearer $OIDC"             -H "content-type: application/json"             -d '{}' > bot2-job.json
+          curl --fail-with-body --retry 5 --retry-delay 3 --retry-max-time 30 --retry-all-errors -sS -X POST "$BOT2_API/next"             -H "Authorization: Bearer $OIDC"             -H "content-type: application/json"             -d '{}' > bot2-job.json
           STAGE="$(python -c 'import json; print(json.load(open("bot2-job.json")).get("stage",""))')"
           if [ "$STAGE" = "idle" ]; then
             echo "run_job=false" >> "$GITHUB_OUTPUT"
