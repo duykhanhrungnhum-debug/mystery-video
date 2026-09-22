@@ -73,6 +73,59 @@ Deno.serve(async(req:Request)=>{
       return Response.json({ok:true,profile:u.data});
     }
 
+    if(path.endsWith("/memory/load")){
+      const hashes=Array.isArray(body.source_hashes)?body.source_hashes.map((x:any)=>String(x||"").trim()).filter(Boolean):[];
+      if(hashes.length>200)throw new Error("memory_batch_too_large");
+      if(!hashes.length)return Response.json({ok:true,entries:[]});
+      const modelKey=clip(body.model_key||"hy-mt2-7b-longform-v1",120);
+      const profileVersion=Math.max(1,Number(body.profile_version||1));
+      const q=await db.from("series_translation_memory")
+        .select("source_hash,source_text,translation,qa_state,use_count,first_source_video_id,last_source_video_id,updated_at")
+        .eq("series_id",job.series_id).eq("profile_version",profileVersion).eq("model_key",modelKey)
+        .in("source_hash",hashes);
+      if(q.error)throw new Error("memory_lookup_failed:"+q.error.message);
+      return Response.json({ok:true,entries:q.data||[]});
+    }
+
+    if(path.endsWith("/memory/store")){
+      const entries=Array.isArray(body.entries)?body.entries:[];
+      if(entries.length>200)throw new Error("memory_batch_too_large");
+      if(!entries.length)return Response.json({ok:true,stored:0});
+      const modelKey=clip(body.model_key||"hy-mt2-7b-longform-v1",120);
+      const profileVersion=Math.max(1,Number(body.profile_version||1));
+      const now=new Date().toISOString();
+      const rows=entries.map((x:any)=>{
+        const sourceHash=String(x.source_hash||"").trim();
+        const sourceText=String(x.source_text||"").trim();
+        const translation=String(x.translation||"").trim();
+        if(!sourceHash||!sourceText||!translation)throw new Error("invalid_memory_entry");
+        return {
+          series_id:job.series_id,source_hash:sourceHash,source_text:sourceText,translation,
+          profile_version:profileVersion,model_key:modelKey,
+          qa_state:["passed","reviewed","repaired"].includes(String(x.qa_state||""))?String(x.qa_state):"passed",
+          first_source_video_id:String(x.first_source_video_id||job.source_video_id),
+          last_source_video_id:String(job.source_video_id),
+          updated_at:now
+        };
+      });
+      const u=await db.from("series_translation_memory").upsert(rows,{
+        onConflict:"series_id,source_hash,profile_version,model_key"
+      });
+      if(u.error)throw new Error("memory_store_failed:"+u.error.message);
+      return Response.json({ok:true,stored:rows.length});
+    }
+
+    if(path.endsWith("/benchmark-complete")){
+      const now=new Date().toISOString();
+      const u=await db.from("longform_jobs").update({
+        state:"completed",stage:"benchmark_complete",
+        message:"Long-form benchmark completed without YouTube upload",
+        heartbeat_at:now,completed_at:now,supervisor_state:"completed",recovery_updated_at:now
+      }).eq("id",job.id).select("id,state,stage,message,completed_at").single();
+      if(u.error)throw new Error("benchmark_complete_failed:"+u.error.message);
+      return Response.json({ok:true,job:u.data});
+    }
+
     if(path.endsWith("/load")){
       const keys=Array.isArray(body.segment_keys)?body.segment_keys.map((x:any)=>String(x||"").trim()).filter(Boolean):[];
       if(keys.length>200)throw new Error("cache_batch_too_large");
