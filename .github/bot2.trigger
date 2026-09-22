@@ -1,2 +1,1 @@
-run=2026-09-22T17:45:00+07:00
-mode=production
+reporting_test=2026-09-22T18:45:00+07:00
