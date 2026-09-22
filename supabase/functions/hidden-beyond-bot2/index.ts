@@ -53,7 +53,11 @@ async function authorizeGitHub(req:Request){
   if(!["push","workflow_dispatch","schedule"].includes(String(payload.event_name||"")))
     throw new Error("wrong_event");
   const wr=String(payload.job_workflow_ref||"");
-  if(wr && !wr.startsWith(REPO+"/.github/workflows/hidden-beyond-bot2.yml@"))
+  const allowedWorkflows=[
+    REPO+"/.github/workflows/hidden-beyond-bot2-vault.yml@",
+    REPO+"/.github/workflows/hidden-beyond-bot2.yml@",
+  ];
+  if(wr && !allowedWorkflows.some((prefix)=>wr.startsWith(prefix)))
     throw new Error("wrong_workflow");
 }
 async function loadState(db:any){
