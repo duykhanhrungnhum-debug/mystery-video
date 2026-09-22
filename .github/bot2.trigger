@@ -1,2 +1,2 @@
-bootstrap=2026-09-22T18:40:00+07:00
-api_version=5
+run=2026-09-22T17:45:00+07:00
+mode=production
