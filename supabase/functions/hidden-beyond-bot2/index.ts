@@ -108,6 +108,10 @@ async function selectNext(db:any,state:any){
     const u=await db.from("hidden_beyond_bot2_state").update({
       next_rotation:rotation,
       status:"running",
+      stage:"selected",
+      started_at:now,
+      completed_at:null,
+      youtube_video_id:null,
       current_source_id:fixed.source_id,
       current_series_id:fixed.series_id,
       current_source_video_id:iq.data.source_item_id,
@@ -122,6 +126,10 @@ async function selectNext(db:any,state:any){
   const now=new Date().toISOString();
   await db.from("hidden_beyond_bot2_state").update({
     status:"idle",
+    stage:"idle",
+    started_at:null,
+    completed_at:null,
+    youtube_video_id:null,
     current_source_id:null,current_series_id:null,current_source_video_id:null,
     last_message:"No pending approved episode in fixed five-source pool",
     updated_at:now,
@@ -152,6 +160,21 @@ Deno.serve(async(req:Request)=>{
       return Response.json({ok:true,...result});
     }
 
+    if(path.endsWith("/stage")){
+      const state=await loadState(db);
+      const videoId=String(body.source_video_id||"");
+      if(!videoId || videoId!==String(state.current_source_video_id||""))
+        return Response.json({ok:false,error:"job_mismatch"},{status:409});
+      const stage=String(body.stage||"").trim().slice(0,80);
+      const message=String(body.message||stage||"running").trim().slice(0,1500);
+      if(!stage) return Response.json({ok:false,error:"stage_required"},{status:400});
+      const u=await db.from("hidden_beyond_bot2_state").update({
+        status:"running",stage,last_message:message,updated_at:new Date().toISOString()
+      }).eq("id",1).select("*").single();
+      if(u.error) throw new Error("state_stage_update_failed:"+u.error.message);
+      return Response.json({ok:true,stage:"updated",state:u.data});
+    }
+
     if(path.endsWith("/fail")){
       const state=await loadState(db);
       const videoId=String(body.source_video_id||"");
@@ -159,7 +182,8 @@ Deno.serve(async(req:Request)=>{
         return Response.json({ok:false,error:"job_mismatch"},{status:409});
       const msg=String(body.error||body.message||"Bot2 job failed").slice(0,1500);
       const u=await db.from("hidden_beyond_bot2_state").update({
-        status:"failed",last_message:msg,updated_at:new Date().toISOString()
+        status:"failed",stage:String(body.stage||"failed").slice(0,80),last_message:msg,
+        completed_at:new Date().toISOString(),updated_at:new Date().toISOString()
       }).eq("id",1).select("*").single();
       if(u.error) throw new Error("state_fail_failed:"+u.error.message);
       return Response.json({ok:true,stage:"failed",state:u.data});
@@ -184,9 +208,12 @@ Deno.serve(async(req:Request)=>{
       if(su.error) throw new Error("series_progress_update_failed:"+su.error.message);
 
       const next=(fixed.rotation%5)+1;
+      const ytId=String(body.youtube_video_id||"").trim();
       const u=await db.from("hidden_beyond_bot2_state").update({
-        next_rotation:next,status:"idle",
+        next_rotation:next,status:"idle",stage:"completed",
         current_source_id:null,current_series_id:null,current_source_video_id:null,
+        youtube_video_id:ytId||null,
+        completed_at:new Date().toISOString(),
         last_message:"Completed rotation "+fixed.rotation+" episode "+episode,
         updated_at:new Date().toISOString()
       }).eq("id",1).select("*").single();
