@@ -1,151 +1,15 @@
-name: Hidden Beyond Processor # ai-bridge-v1
+name: Hidden Beyond Processor Archived
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/process-video.yml"
-      - ".github/process-video.trigger"
-  schedule:
-    - cron: "17,47 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
-
-concurrency:
-  group: hidden-beyond-video-processor
-  cancel-in-progress: false
 
 jobs:
-  process:
+  archived:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      PROCESSOR_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/processor-api
-      WHISPER_MODEL: small
-      GH_TOKEN: ${{ github.token }}
-
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install media and AI dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-noto-core
-          python -m pip install --upgrade pip
-          pip install "faster-whisper>=1.1,<2"
-          pip install -e .
-          test -n "$GH_TOKEN"
-
-      - name: Claim video and prepare AI request
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          get_oidc() {
-            curl -fsS               -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-processor"               | python -c 'import json,sys; print(json.load(sys.stdin)["value"])'
-          }
-
-          CLAIMED=0
-          COMPLETED=0
-          VIDEO_ID=""
-          FAIL_CODE="processing_failed"
-
-          on_exit() {
-            rc=$?
-            if [ "$rc" -ne 0 ] && [ "$CLAIMED" = "1" ] && [ "$COMPLETED" = "0" ]; then
-              token="$(get_oidc || true)"
-              if [ -n "$token" ]; then
-                err="processor workflow failed with exit code $rc"
-                if [ -f metadata.json ]; then
-                  err="$(python -c 'import json; d=json.load(open("metadata.json")); print(d.get("error") or ("post-processing/upload failed after processor status=" + str(d.get("status","unknown"))))' 2>/dev/null || echo "$err")"
-                fi
-                jq -n --argjson video_id "$VIDEO_ID" --arg code "$FAIL_CODE" --arg error "$err"                   '{video_id:$video_id,code:$code,error:$error}' > fail.json
-                curl -sS -X POST "$PROCESSOR_API/fail"                   -H "Authorization: Bearer $token"                   -H "content-type: application/json"                   --data-binary @fail.json || true
-              fi
-            fi
-            exit "$rc"
-          }
-          trap on_exit EXIT
-
-          token="$(get_oidc)"
-          curl -fsS -X POST "$PROCESSOR_API/claim"             -H "Authorization: Bearer $token"             -H "content-type: application/json"             -d '{}' > claim.json
-
-          stage="$(jq -r '.stage' claim.json)"
-          if [ "$stage" = "idle" ]; then
-            echo "::notice title=Queue idle::No eligible processing job. This is a normal terminal state for this run; do not retry claim in a loop."
-            jq -n '{state:"idle",reason:"no_eligible_job",retry_in_run:false}' > processor-state.json
-            COMPLETED=1
-            exit 0
-          fi
-          if [ "$stage" != "claimed" ]; then
-            cat claim.json
-            exit 1
-          fi
-
-          CLAIMED=1
-          VIDEO_ID="$(jq -r '.job.video_id' claim.json)"
-          TITLE="$(jq -r '.job.title' claim.json)"
-          ORIGINAL_URL="$(jq -r '.job.original_download_url' claim.json)"
-          PROCESSED_URL="$(jq -r '.job.processed.signedUrl' claim.json)"
-          SUBTITLE_URL="$(jq -r '.job.subtitle.signedUrl' claim.json)"
-          PROCESSED_PATH="$(jq -r '.job.processed.path' claim.json)"
-          SUBTITLE_PATH="$(jq -r '.job.subtitle.path' claim.json)"
-
-          curl -fL "$ORIGINAL_URL" -o input.media
-
-          set +e
-          python scripts/prepare_ai_request.py --input input.media --output request.json --title "$TITLE" --video-id "$VIDEO_ID"
-          processor_rc=$?
-          set -e
-
-          if [ "$processor_rc" -eq 3 ]; then
-            FAIL_CODE="no_speech"
-            exit 3
-          elif [ "$processor_rc" -eq 4 ]; then
-            FAIL_CODE="unsupported_language"
-            exit 4
-          elif [ "$processor_rc" -ne 0 ]; then
-            FAIL_CODE="processing_failed"
-            exit "$processor_rc"
-          fi
-
-          mkdir -p ai-request
-          cp request.json ai-request/request.json
-          cp claim.json ai-request/claim.json
-          cp input.media ai-request/input.media
-          echo "AI request prepared for video $VIDEO_ID."
-          jq -n --argjson video_id "$VIDEO_ID" '{state:"handoff_ready",video_id:$video_id,retry_in_run:false}' > processor-state.json
-          # Do not mark the claimed job complete here. The downstream AI/resume
-          # stages own completion; failures after claim must remain recoverable.
-          COMPLETED=1
-
-      - name: Persist processor state
-        if: ${{ always() && hashFiles('processor-state.json') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: hidden-beyond-processor-state
-          path: processor-state.json
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload request package
-        if: ${{ hashFiles('ai-request/request.json') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: hidden-beyond-ai-request
-          path: ai-request/
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Wake AI- on demand
-        if: ${{ hashFiles('ai-request/request.json') != '' }}
-        run: |
-          echo "Cross-repo handoff is coordinated externally after artifact creation."
-
+      - run: |
+          echo "BOT1_ARCHIVED"
+          echo "This legacy workflow is retained for reference only. Bot2 owns production."
