@@ -20,12 +20,21 @@ class KaggleSubmission:
 class KaggleClient:
     """Minimal Bot2 Kaggle submitter: submit only, progress comes from Supabase callbacks."""
 
-    def __init__(self, token: str, username: str, timeout: float = 120.0):
+    def __init__(
+        self,
+        token: str,
+        username: str,
+        timeout: float = 120.0,
+        broker_url: str = "",
+        broker_token: str = "",
+    ):
         self.token = token.strip()
         self.username = username.strip()
         self.timeout = timeout
-        if not self.token:
-            raise ValueError("KAGGLE_API_TOKEN is required")
+        self.broker_url = broker_url.rstrip("/")
+        self.broker_token = broker_token.strip()
+        if not self.token and not (self.broker_url and self.broker_token):
+            raise ValueError("Kaggle credential or broker credential is required")
         if not self.username:
             raise ValueError("KAGGLE_USERNAME is required")
 
@@ -75,6 +84,29 @@ class KaggleClient:
         )
 
     def _post(self, payload: dict) -> dict:
+        if self.broker_url and self.broker_token:
+            req = Request(
+                self.broker_url + "/submit",
+                data=json.dumps(payload).encode("utf-8"),
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {self.broker_token}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Hidden-Beyond-Bot2/1.0",
+                },
+            )
+            with urlopen(req, timeout=self.timeout) as response:
+                wrapper = json.loads(response.read().decode("utf-8"))
+            if not isinstance(wrapper, dict):
+                raise ValueError("Kaggle broker response must be an object")
+            if wrapper.get("ok") is not True:
+                return {"error": wrapper.get("error") or wrapper.get("kaggle") or wrapper}
+            data = wrapper.get("kaggle")
+            if not isinstance(data, dict):
+                raise ValueError("Kaggle broker payload must contain an object")
+            return data
+
         req = Request(
             "https://www.kaggle.com/api/v1/kernels/push",
             data=json.dumps(payload).encode("utf-8"),
