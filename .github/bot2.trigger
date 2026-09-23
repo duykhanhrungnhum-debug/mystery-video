@@ -1,5 +1,5 @@
-run=2026-09-23T14:27:00+07:00
+run=2026-09-23T15:32:00+07:00
 mode=production
 source_rotation=2
-episode=1
-process=checkpoint-cursor-resume-gpu-cpu-split
+episode=2
+process=standardized-stage-resume-caption-first-v2
