@@ -120,15 +120,7 @@ jobs:
           )
           PY
           fi
-          if [ "${run_job:-}" = "false" ]; then
-            :
-          fi
-          CPU_READY="$(python - <<'PY'
-import json
-d=json.load(open("bot2-job.json",encoding="utf-8"))
-print("true" if d.get("checkpoint_cpu_ready") else "false")
-PY
-)"
+          CPU_READY="$(python -c 'import json; d=json.load(open("bot2-job.json",encoding="utf-8")); print("true" if d.get("checkpoint_cpu_ready") else "false")')"
           if [ "$CPU_READY" = "true" ]; then
             echo "need_gpu=false" >> "$GITHUB_OUTPUT"
             echo "BOT2_RESUME_STAGE translation_complete cpu_ready=true; GPU will be skipped"
