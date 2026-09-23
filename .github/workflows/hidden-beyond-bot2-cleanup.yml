@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 10
     env:
       BOT2_KAGGLE_BROKER_URL: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/hidden-beyond-kaggle-broker
+      BOT2_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/hidden-beyond-bot2
     steps:
       - uses: actions/checkout@v4
 
@@ -35,3 +36,16 @@ jobs:
           PY
           curl --fail-with-body -sS -X POST "$BOT2_KAGGLE_BROKER_URL/delete-kernel"             -H "Authorization: Bearer $OIDC"             -H "content-type: application/json"             --data-binary @delete.json > delete-result.json
           cat delete-result.json
+          BOT2_OIDC="$(curl -fsSL \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python - "$VIDEO_ID" <<'PY' > gpu-released.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1]}))
+          PY
+          curl --fail-with-body -sS -X POST "$BOT2_API/gpu-released" \
+            -H "Authorization: Bearer $BOT2_OIDC" \
+            -H "content-type: application/json" \
+            --data-binary @gpu-released.json > /dev/null || true
+          echo "BOT2_GPU_STATE_CLEAR_REQUESTED"
