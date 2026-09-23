@@ -525,6 +525,19 @@ Deno.serve(async(req:Request)=>{
 
     await authorizeGitHub(req);
 
+    if(path.endsWith("/gpu-released")){
+      const state=await loadState(db);
+      const videoId=String(body.source_video_id||"").trim();
+      if(!videoId||videoId!==String(state.current_source_video_id||""))
+        return Response.json({ok:false,error:"job_mismatch"},{status:409});
+      const u=await db.from("hidden_beyond_bot2_state").update({
+        gpu_kernel_ref:null,
+        updated_at:new Date().toISOString()
+      }).eq("id",1).select("status,stage,current_source_video_id,gpu_kernel_ref,updated_at").single();
+      if(u.error) throw new Error("gpu_release_state_failed:"+u.error.message);
+      return Response.json({ok:true,stage:"gpu_released",state:u.data});
+    }
+
     if(path.endsWith("/recover-upload")){
       const state=await loadState(db);
       if(state.status!=="failed"||state.stage!=="youtube_uploaded"||!state.current_source_video_id)
