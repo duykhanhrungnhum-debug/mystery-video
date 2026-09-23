@@ -56,8 +56,33 @@ jobs:
             curl -fsSL               -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2"               | python -c 'import json,sys; print(json.load(sys.stdin)["value"])'
           }
           OIDC="$(get_oidc)"
-          curl --fail-with-body --retry 5 --retry-delay 3 --retry-max-time 30 --retry-all-errors -sS -X POST "$BOT2_API/next"             -H "Authorization: Bearer $OIDC"             -H "content-type: application/json"             -d '{}' > bot2-job.json
+          python scripts/bot2_build_request.py \
+            --event "$GITHUB_EVENT_NAME" \
+            --trigger .github/bot2.trigger \
+            --output bot2-next-request.json
+          curl --fail-with-body --retry 5 --retry-delay 3 --retry-max-time 30 --retry-all-errors -sS -X POST "$BOT2_API/next" \
+            -H "Authorization: Bearer $OIDC" \
+            -H "content-type: application/json" \
+            --data-binary @bot2-next-request.json > bot2-job.json
           STAGE="$(python -c 'import json; print(json.load(open("bot2-job.json")).get("stage",""))')"
+          if [ "$STAGE" = "target_missing" ] || [ "$STAGE" = "already_completed" ]; then
+            echo "run_job=false" >> "$GITHUB_OUTPUT"
+            echo "reuse_source=false" >> "$GITHUB_OUTPUT"
+            python - <<'PY'
+          import json
+          d=json.load(open("bot2-job.json",encoding="utf-8"))
+          print("BOT2_TARGET_NOOP", json.dumps(d,ensure_ascii=False))
+          PY
+            exit 0
+          fi
+          if [ "$STAGE" = "target_invalid" ] || [ "$STAGE" = "target_conflict" ]; then
+            python - <<'PY'
+          import json
+          d=json.load(open("bot2-job.json",encoding="utf-8"))
+          print("::error title=Bot2 selection blocked::"+json.dumps(d,ensure_ascii=False))
+          PY
+            exit 4
+          fi
           if [ "$STAGE" = "idle" ]; then
             echo "run_job=false" >> "$GITHUB_OUTPUT"
             echo "reuse_source=false" >> "$GITHUB_OUTPUT"
@@ -120,6 +145,9 @@ jobs:
           )
           PY
           fi
+          python scripts/bot2_build_request.py \
+            --verify-request bot2-next-request.json \
+            --verify-job bot2-job.json
           CPU_READY="$(python -c 'import json; d=json.load(open("bot2-job.json",encoding="utf-8")); print("true" if d.get("checkpoint_cpu_ready") else "false")')"
           if [ "$CPU_READY" = "true" ]; then
             echo "need_gpu=false" >> "$GITHUB_OUTPUT"
