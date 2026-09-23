@@ -18,7 +18,7 @@ concurrency:
 jobs:
   process-one-episode:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     env:
       BOT2_API: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/hidden-beyond-bot2
       BOT2_KAGGLE_BROKER_URL: https://rlqqcuuphjmwksanbfml.supabase.co/functions/v1/hidden-beyond-kaggle-broker
@@ -204,7 +204,7 @@ jobs:
           test "$(python -c 'import json; print(json.load(open("youtube-session.json")).get("stage",""))')" = "youtube_upload_ready"
           echo "BOT2_YOUTUBE_SESSION_READY"
 
-      - name: Submit mounted-source GPU AI job
+      - name: Submit mounted-source GPU translation job
         if: steps.claim.outputs.run_job == 'true'
         shell: bash
         run: |
@@ -236,21 +236,94 @@ jobs:
           curl --fail-with-body -sS -X POST "$BOT2_API/worker-stage"             -H "x-bot2-token: $TOKEN" -H "content-type: application/json"             --data-binary @gpu-stage.json > /dev/null
           echo "BOT2_GPU_SUBMITTED ref=$GPU_REF"
 
-      - name: Follow AI, TTS, mix and YouTube upload
+      - name: Follow GPU translation checkpoint
+        if: steps.claim.outputs.run_job == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          READY=0
+          for i in $(seq 1 220); do
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            curl --fail-with-body --retry 2 --retry-all-errors -sS -X POST "$BOT2_API/status" \
+              -H "Authorization: Bearer $OIDC" -H "content-type: application/json" -d '{}' > bot2-status.json
+            STATE="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d["status"])')"
+            STAGE="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d["stage"])')"
+            MSG="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d.get("last_message") or "")')"
+            echo "BOT2_GPU_PROGRESS poll=$i state=$STATE stage=$STAGE message=$MSG"
+            if [ "$STATE" = "failed" ]; then
+              echo "::error title=Bot2 GPU translation stopped::$STAGE / $MSG"
+              exit 1
+            fi
+            if [ "$STAGE" = "translation_complete" ]; then
+              echo "BOT2_TRANSLATION_CHECKPOINT_READY"
+              READY=1
+              break
+            fi
+            sleep 30
+          done
+          if [ "$READY" != "1" ]; then
+            VIDEO_ID="$(python -c 'import json; print(json.load(open("bot2-job.json"))["item"]["source_item_id"])')"
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            python - "$VIDEO_ID" <<'PY' > fail.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1],"stage":"translation_timeout","error":"GPU translation checkpoint did not finish within 110 minutes"}))
+          PY
+            curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
+            exit 1
+          fi
+
+      - name: Submit CPU TTS mix upload job
+        if: steps.claim.outputs.run_job == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          VIDEO_ID="$(python -c 'import json; print(json.load(open("bot2-job.json"))["item"]["source_item_id"])')"
+          SOURCE_REF="$(cat source-kernel-ref.txt)"
+          BROKER_OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-kaggle-broker" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          export BOT2_KAGGLE_BROKER_TOKEN="$BROKER_OIDC"
+          if ! python scripts/bot2_submit_cpu_tts.py \
+              --job bot2-job.json \
+              --youtube-session youtube-session.json \
+              --source-ref "$SOURCE_REF"; then
+            OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            python - "$VIDEO_ID" <<'PY' > fail.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1],"stage":"cpu_tts_submit","error":"Kaggle CPU TTS submission failed"}))
+          PY
+            curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
+            exit 1
+          fi
+          CPU_REF="$(python -c 'import json; print(json.load(open("bot2-cpu-submission.json"))["ref"])')"
+          TOKEN="$(python -c 'import json; print(json.load(open("bot2-job.json"))["job_token"])')"
+          python - "$VIDEO_ID" "$CPU_REF" <<'PY' > cpu-stage.json
+          import json,sys
+          print(json.dumps({
+              "source_video_id":sys.argv[1],
+              "stage":"tts",
+              "message":"CPU TTS/mix worker submitted ref="+sys.argv[2],
+          }))
+          PY
+          curl --fail-with-body -sS -X POST "$BOT2_API/worker-stage" \
+            -H "x-bot2-token: $TOKEN" -H "content-type: application/json" \
+            --data-binary @cpu-stage.json > /dev/null
+          echo "BOT2_CPU_TTS_SUBMITTED ref=$CPU_REF"
+
+      - name: Follow CPU TTS mix and YouTube upload
         if: steps.claim.outputs.run_job == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           DONE=0
-          for i in $(seq 1 180); do
+          for i in $(seq 1 300); do
             OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
-            curl --fail-with-body --retry 2 --retry-all-errors -sS -X POST "$BOT2_API/status"               -H "Authorization: Bearer $OIDC" -H "content-type: application/json" -d '{}' > bot2-status.json
+            curl --fail-with-body --retry 2 --retry-all-errors -sS -X POST "$BOT2_API/status" \
+              -H "Authorization: Bearer $OIDC" -H "content-type: application/json" -d '{}' > bot2-status.json
             STATE="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d["status"])')"
             STAGE="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d["stage"])')"
             MSG="$(python -c 'import json; d=json.load(open("bot2-status.json"))["state"]; print(d.get("last_message") or "")')"
-            echo "BOT2_PROGRESS poll=$i state=$STATE stage=$STAGE message=$MSG"
+            echo "BOT2_CPU_PROGRESS poll=$i state=$STATE stage=$STAGE message=$MSG"
             if [ "$STATE" = "failed" ]; then
-              echo "::error title=Bot2 stopped::$STAGE / $MSG"
+              echo "::error title=Bot2 CPU stage stopped::$STAGE / $MSG"
               exit 1
             fi
             if [ "$STATE" = "idle" ] && [ "$STAGE" = "completed" ]; then
@@ -267,7 +340,7 @@ jobs:
             OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
             python - "$VIDEO_ID" <<'PY' > fail.json
           import json,sys
-          print(json.dumps({"source_video_id":sys.argv[1],"stage":"processing_timeout","error":"GPU processing did not finish within 90 minutes"}))
+          print(json.dumps({"source_video_id":sys.argv[1],"stage":"cpu_processing_timeout","error":"CPU TTS/mix/upload did not finish within 150 minutes"}))
           PY
             curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
             exit 1
