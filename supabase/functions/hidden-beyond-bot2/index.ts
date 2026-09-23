@@ -340,6 +340,9 @@ async function completeJob(db:any,state:any,youtubeVideoId:string){
   }).eq("id",fixed.series_id);
   if(su.error) throw new Error("series_progress_update_failed:"+su.error.message);
 
+  await db.from("hidden_beyond_bot2_checkpoints")
+    .delete().eq("source_video_id",videoId);
+
   const nextRotation=(fixed.rotation%5)+1;
   const u=await db.from("hidden_beyond_bot2_state").update({
     next_rotation:nextRotation,status:"idle",stage:"completed",
@@ -359,6 +362,42 @@ Deno.serve(async(req:Request)=>{
     const db=createClient(Deno.env.get("SUPABASE_URL")!,adminKey(),{auth:{persistSession:false,autoRefreshToken:false}});
     const path=new URL(req.url).pathname;
     let body:any={}; try{body=await req.json();}catch{}
+
+    if(path.endsWith("/translation-checkpoint-get")){
+      const state=await authorizeWorker(req,db,body);
+      const workerRevision=clip(body.worker_revision||"",80);
+      if(!workerRevision) return Response.json({ok:false,error:"worker_revision_required"},{status:400});
+      const q=await db.from("hidden_beyond_bot2_checkpoints")
+        .select("source_video_id,worker_revision,phase,cursor,payload,updated_at")
+        .eq("source_video_id",String(state.current_source_video_id)).maybeSingle();
+      if(q.error) throw new Error("checkpoint_lookup_failed:"+q.error.message);
+      if(!q.data) return Response.json({ok:true,found:false});
+      if(String(q.data.worker_revision)!==workerRevision)
+        return Response.json({ok:true,found:false,reason:"worker_revision_mismatch"});
+      return Response.json({
+        ok:true,found:true,phase:q.data.phase,cursor:Number(q.data.cursor||0),
+        payload:q.data.payload||{},updated_at:q.data.updated_at
+      });
+    }
+    if(path.endsWith("/translation-checkpoint-save")){
+      const state=await authorizeWorker(req,db,body);
+      const workerRevision=clip(body.worker_revision||"",80);
+      const phase=clip(body.phase||"",80);
+      const cursor=Math.max(0,Number(body.cursor||0));
+      const payload=(body.payload&&typeof body.payload==="object")?body.payload:{};
+      if(!workerRevision) return Response.json({ok:false,error:"worker_revision_required"},{status:400});
+      if(!["translating","translation_complete"].includes(phase))
+        return Response.json({ok:false,error:"invalid_checkpoint_phase"},{status:400});
+      const payloadBytes=new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+      if(payloadBytes>2_000_000)
+        return Response.json({ok:false,error:"checkpoint_payload_too_large"},{status:413});
+      const u=await db.from("hidden_beyond_bot2_checkpoints").upsert({
+        source_video_id:String(state.current_source_video_id),
+        worker_revision:workerRevision,phase,cursor,payload,updated_at:new Date().toISOString()
+      },{onConflict:"source_video_id"}).select("source_video_id,phase,cursor,updated_at").single();
+      if(u.error) throw new Error("checkpoint_save_failed:"+u.error.message);
+      return Response.json({ok:true,saved:true,...u.data});
+    }
 
     if(path.endsWith("/worker-stage")){
       const state=await authorizeWorker(req,db,body);
