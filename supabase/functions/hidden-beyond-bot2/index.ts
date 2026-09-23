@@ -65,6 +65,48 @@ async function loadState(db:any){
   if(q.error) throw new Error("state_lookup_failed:"+q.error.message);
   return q.data;
 }
+const CHECKPOINT_PHASE_RANK:Record<string,number>={
+  asr_complete:10,
+  translating:20,
+  translation_complete:30,
+};
+function checkpointRank(phase:any):number{
+  return CHECKPOINT_PHASE_RANK[String(phase||"")]||0;
+}
+async function checkpointSummary(db:any,sourceVideoId:string){
+  const videoId=String(sourceVideoId||"").trim();
+  if(!videoId) return {
+    checkpoint_found:false,checkpoint_phase:null,checkpoint_cursor:0,
+    checkpoint_segments:0,checkpoint_translated:0,checkpoint_cpu_ready:false,
+  };
+  const q=await db.from("hidden_beyond_bot2_checkpoints")
+    .select("worker_revision,phase,cursor,payload,updated_at")
+    .eq("source_video_id",videoId).maybeSingle();
+  if(q.error) throw new Error("checkpoint_summary_failed:"+q.error.message);
+  if(!q.data) return {
+    checkpoint_found:false,checkpoint_phase:null,checkpoint_cursor:0,
+    checkpoint_segments:0,checkpoint_translated:0,checkpoint_cpu_ready:false,
+  };
+  const payload=(q.data.payload&&typeof q.data.payload==="object")?q.data.payload:{};
+  const segments=Array.isArray(payload.segments_data)?payload.segments_data.length:0;
+  const translated=(payload.translated&&typeof payload.translated==="object")
+    ?Object.keys(payload.translated).length:0;
+  const phase=String(q.data.phase||"");
+  return {
+    checkpoint_found:true,
+    checkpoint_revision:String(q.data.worker_revision||""),
+    checkpoint_phase:phase,
+    checkpoint_cursor:Number(q.data.cursor||0),
+    checkpoint_segments:segments,
+    checkpoint_translated:translated,
+    checkpoint_cpu_ready:(
+      phase==="translation_complete" &&
+      segments>0 &&
+      translated>=segments
+    ),
+    checkpoint_updated_at:q.data.updated_at,
+  };
+}
 async function authorizeWorker(req:Request,db:any,body:any){
   const token=req.headers.get("x-bot2-token")||"";
   if(!token) throw new Error("missing_worker_token");
@@ -386,30 +428,64 @@ Deno.serve(async(req:Request)=>{
       const cursor=Math.max(0,Number(body.cursor||0));
       const payload=(body.payload&&typeof body.payload==="object")?body.payload:{};
       if(!workerRevision) return Response.json({ok:false,error:"worker_revision_required"},{status:400});
-      if(!["translating","translation_complete"].includes(phase))
+      if(!["asr_complete","translating","translation_complete"].includes(phase))
         return Response.json({ok:false,error:"invalid_checkpoint_phase"},{status:400});
-      const payloadBytes=new TextEncoder().encode(JSON.stringify(payload)).byteLength;
-      if(payloadBytes>2_000_000)
-        return Response.json({ok:false,error:"checkpoint_payload_too_large"},{status:413});
       const existing=await db.from("hidden_beyond_bot2_checkpoints")
         .select("worker_revision,phase,cursor,payload")
         .eq("source_video_id",String(state.current_source_video_id)).maybeSingle();
       if(existing.error) throw new Error("checkpoint_guard_lookup_failed:"+existing.error.message);
-      if(
-        existing.data &&
-        String(existing.data.worker_revision)===workerRevision &&
-        String(existing.data.phase)==="translation_complete" &&
-        Number(existing.data.cursor||0)>=cursor &&
-        phase==="translating"
-      ){
-        return Response.json({
-          ok:true,saved:false,protected:true,reason:"complete_checkpoint_protected",
-          phase:existing.data.phase,cursor:Number(existing.data.cursor||0)
-        });
+
+      let finalPhase=phase;
+      let finalCursor=cursor;
+      let finalPayload={...payload};
+      if(existing.data && String(existing.data.worker_revision)===workerRevision){
+        const oldPayload=(existing.data.payload&&typeof existing.data.payload==="object")
+          ?existing.data.payload:{};
+        finalPayload={...oldPayload,...payload};
+
+        // An ASR-only enrichment must never erase completed translations.
+        if(
+          oldPayload.translated &&
+          typeof oldPayload.translated==="object" &&
+          Object.keys(oldPayload.translated).length>0 &&
+          (
+            !payload.translated ||
+            typeof payload.translated!=="object" ||
+            Object.keys(payload.translated).length===0
+          )
+        ){
+          finalPayload.translated=oldPayload.translated;
+        }
+        if(
+          Array.isArray(oldPayload.review_ids) &&
+          (!Array.isArray(payload.review_ids)||payload.review_ids.length===0)
+        ) finalPayload.review_ids=oldPayload.review_ids;
+        if(
+          oldPayload.hard_reasons &&
+          typeof oldPayload.hard_reasons==="object" &&
+          (
+            !payload.hard_reasons ||
+            typeof payload.hard_reasons!=="object" ||
+            Object.keys(payload.hard_reasons).length===0
+          )
+        ) finalPayload.hard_reasons=oldPayload.hard_reasons;
+
+        const oldRank=checkpointRank(existing.data.phase);
+        const newRank=checkpointRank(phase);
+        if(oldRank>newRank){
+          finalPhase=String(existing.data.phase);
+          finalCursor=Number(existing.data.cursor||0);
+        }else if(oldRank===newRank){
+          finalCursor=Math.max(Number(existing.data.cursor||0),cursor);
+        }
       }
+      const payloadBytes=new TextEncoder().encode(JSON.stringify(finalPayload)).byteLength;
+      if(payloadBytes>2_000_000)
+        return Response.json({ok:false,error:"checkpoint_payload_too_large"},{status:413});
       const u=await db.from("hidden_beyond_bot2_checkpoints").upsert({
         source_video_id:String(state.current_source_video_id),
-        worker_revision:workerRevision,phase,cursor,payload,updated_at:new Date().toISOString()
+        worker_revision:workerRevision,phase:finalPhase,cursor:finalCursor,
+        payload:finalPayload,updated_at:new Date().toISOString()
       },{onConflict:"source_video_id"}).select("source_video_id,phase,cursor,updated_at").single();
       if(u.error) throw new Error("checkpoint_save_failed:"+u.error.message);
       return Response.json({ok:true,saved:true,...u.data});
@@ -505,8 +581,12 @@ Deno.serve(async(req:Request)=>{
         job_token_hash:await sha256Hex(token),job_expires_at:expires,updated_at:new Date().toISOString()
       }).eq("id",1);
       if(u.error) throw new Error("worker_token_save_failed:"+u.error.message);
+      const checkpoint=await checkpointSummary(
+        db,
+        String(result?.item?.source_item_id||result?.source_video_id||"")
+      );
       return Response.json({
-        ok:true,...result,job_token:token,job_expires_at:expires,
+        ok:true,...result,...checkpoint,job_token:token,job_expires_at:expires,
         callback_base:Deno.env.get("SUPABASE_URL")+"/functions/v1/hidden-beyond-bot2"
       });
     }
