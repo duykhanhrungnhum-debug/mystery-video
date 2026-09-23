@@ -213,7 +213,63 @@ async function peekNext(db:any,state:any){
   }
   return {stage:"idle"};
 }
-async function selectNext(db:any,state:any){
+async function peekExact(db:any,rotation:number,episode:number){
+  const fixed=FIXED.find(x=>x.rotation===rotation);
+  if(!fixed) return {stage:"target_invalid",reason:"rotation_out_of_range",rotation,episode};
+  if(!Number.isInteger(episode)||episode<1)
+    return {stage:"target_invalid",reason:"episode_out_of_range",rotation,episode};
+
+  const sq=await db.from("source_series")
+    .select("id,source_id,series_title,playlist_title,last_ingested_episode,active,state")
+    .eq("id",fixed.series_id).single();
+  if(sq.error) throw new Error("series_lookup_failed:"+sq.error.message);
+  if(!sq.data.active)
+    return {stage:"target_missing",reason:"series_inactive",rotation,episode};
+
+  const iq=await db.from("source_items")
+    .select("source_id,series_id,source_item_id,source_url,title,series_title,episode_number,rights_status,rights_basis,evidence_url")
+    .eq("source_id",fixed.source_id).eq("series_id",fixed.series_id)
+    .eq("active",true).eq("rights_status","approved")
+    .eq("episode_number",episode).maybeSingle();
+  if(iq.error) throw new Error("source_item_lookup_failed:"+iq.error.message);
+  if(!iq.data){
+    return {
+      stage:"target_missing",reason:"approved_source_item_not_found",
+      rotation,episode,series_id:fixed.series_id,source_id:fixed.source_id,
+      last_ingested_episode:Number(sq.data.last_ingested_episode||0)
+    };
+  }
+
+  const existing=await db.from("videos")
+    .select("youtube_video_id,status,processing_status")
+    .eq("source_id",fixed.source_id)
+    .eq("source_video_id",String(iq.data.source_item_id))
+    .maybeSingle();
+  if(existing.error) throw new Error("existing_video_lookup_failed:"+existing.error.message);
+  if(existing.data?.youtube_video_id && existing.data?.processing_status==="complete"){
+    return {
+      stage:"already_completed",rotation,episode,
+      source_id:fixed.source_id,series_id:fixed.series_id,
+      source_video_id:String(iq.data.source_item_id),
+      youtube_video_id:String(existing.data.youtube_video_id)
+    };
+  }
+  return {stage:"ready",rotation,series:sq.data,item:iq.data};
+}
+
+async function selectNext(db:any,state:any,request:any={}){
+  const selectionMode=String(request?.selection_mode||"rotation")==="exact"?"exact":"rotation";
+  const targetRotation=Number(request?.target_rotation||0);
+  const targetEpisode=Number(request?.target_episode||0);
+  if(selectionMode==="exact" && (
+    !Number.isInteger(targetRotation)||targetRotation<1||targetRotation>5||
+    !Number.isInteger(targetEpisode)||targetEpisode<1
+  )){
+    return {
+      stage:"target_invalid",reason:"exact_target_requires_rotation_and_episode",
+      rotation:targetRotation,episode:targetEpisode
+    };
+  }
   if(
     state.status==="failed" &&
     state.stage==="youtube_uploaded" &&
@@ -245,6 +301,20 @@ async function selectNext(db:any,state:any){
         .eq("source_id",fixed.source_id).eq("series_id",fixed.series_id)
         .eq("source_item_id",String(state.current_source_video_id)).single();
       if(iq.error) throw new Error("source_item_lookup_failed:"+iq.error.message);
+      if(
+        selectionMode==="exact" &&
+        (
+          fixed.rotation!==targetRotation ||
+          Number(iq.data.episode_number||0)!==targetEpisode
+        )
+      ){
+        return {
+          stage:"target_conflict",reason:"failed_job_does_not_match_exact_target",
+          requested_rotation:targetRotation,requested_episode:targetEpisode,
+          active_rotation:fixed.rotation,active_episode:Number(iq.data.episode_number||0),
+          source_video_id:String(state.current_source_video_id)
+        };
+      }
       const now=new Date().toISOString();
       const u=await db.from("hidden_beyond_bot2_state").update({
         status:"running",stage:"source_ready",completed_at:null,youtube_video_id:null,
@@ -272,7 +342,12 @@ async function selectNext(db:any,state:any){
       completed_at:new Date().toISOString(),updated_at:new Date().toISOString()
     }).eq("id",1);
   }
-  const next=await peekNext(db,state);
+  const next=selectionMode==="exact"
+    ? await peekExact(db,targetRotation,targetEpisode)
+    : await peekNext(db,state);
+  if(["target_invalid","target_missing","already_completed","target_conflict"].includes(String(next.stage))){
+    return next;
+  }
   if(next.stage!=="ready"){
     const now=new Date().toISOString();
     await db.from("hidden_beyond_bot2_state").update({
@@ -290,7 +365,8 @@ async function selectNext(db:any,state:any){
     current_source_id:next.item.source_id,current_series_id:next.item.series_id,
     current_source_video_id:next.item.source_item_id,
     source_kernel_ref:null,source_bytes:null,gpu_kernel_ref:null,
-    last_message:"Selected source "+next.rotation+" episode "+String(next.item.episode_number),
+    last_message:(selectionMode==="exact"?"Selected exact target ":"Selected rotation target ")+
+      next.rotation+" episode "+String(next.item.episode_number),
     updated_at:now
   }).eq("id",1).select("*").single();
   if(u.error) throw new Error("state_claim_failed:"+u.error.message);
@@ -585,9 +661,9 @@ Deno.serve(async(req:Request)=>{
     }
     if(path.endsWith("/next")){
       const state=await loadState(db);
-      const result:any=await selectNext(db,state);
+      const result:any=await selectNext(db,state,body||{});
       if(!["selected","resume_source_ready"].includes(String(result.stage)))
-        return Response.json({ok:true,...result});
+        return Response.json({ok:true,selection_mode:String(body?.selection_mode||"rotation"),...result});
       const token=randomToken();
       const expires=new Date(Date.now()+4*3600*1000).toISOString();
       const u=await db.from("hidden_beyond_bot2_state").update({
@@ -599,7 +675,7 @@ Deno.serve(async(req:Request)=>{
         String(result?.item?.source_item_id||result?.source_video_id||"")
       );
       return Response.json({
-        ok:true,...result,...checkpoint,job_token:token,job_expires_at:expires,
+        ok:true,selection_mode:String(body?.selection_mode||"rotation"),...result,...checkpoint,job_token:token,job_expires_at:expires,
         callback_base:Deno.env.get("SUPABASE_URL")+"/functions/v1/hidden-beyond-bot2"
       });
     }
