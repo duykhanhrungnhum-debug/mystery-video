@@ -391,6 +391,22 @@ Deno.serve(async(req:Request)=>{
       const payloadBytes=new TextEncoder().encode(JSON.stringify(payload)).byteLength;
       if(payloadBytes>2_000_000)
         return Response.json({ok:false,error:"checkpoint_payload_too_large"},{status:413});
+      const existing=await db.from("hidden_beyond_bot2_checkpoints")
+        .select("worker_revision,phase,cursor,payload")
+        .eq("source_video_id",String(state.current_source_video_id)).maybeSingle();
+      if(existing.error) throw new Error("checkpoint_guard_lookup_failed:"+existing.error.message);
+      if(
+        existing.data &&
+        String(existing.data.worker_revision)===workerRevision &&
+        String(existing.data.phase)==="translation_complete" &&
+        Number(existing.data.cursor||0)>=cursor &&
+        phase==="translating"
+      ){
+        return Response.json({
+          ok:true,saved:false,protected:true,reason:"complete_checkpoint_protected",
+          phase:existing.data.phase,cursor:Number(existing.data.cursor||0)
+        });
+      }
       const u=await db.from("hidden_beyond_bot2_checkpoints").upsert({
         source_video_id:String(state.current_source_video_id),
         worker_revision:workerRevision,phase,cursor,payload,updated_at:new Date().toISOString()
