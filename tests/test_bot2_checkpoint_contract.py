@@ -2,13 +2,14 @@ from pathlib import Path
 
 GPU = Path("scripts/bot2_submit_gpu.py")
 CPU = Path("scripts/bot2_submit_cpu_tts.py")
+SOURCE = Path("scripts/bot2_submit_source.py")
 WORKFLOW = Path(".github/workflows/hidden-beyond-bot2-vault.yml")
 EDGE = Path("supabase/functions/hidden-beyond-bot2/index.ts")
 
 
 def test_bot2_pins_worker_and_passes_revision():
     source = GPU.read_text(encoding="utf-8")
-    assert 'AI_WORKER_REVISION = "dc2e0efad88d567e2d57063836a4f940e23dcfed"' in source
+    assert 'AI_WORKER_REVISION = "1d6855140575f30a84ed19039b4495f57af4142b"' in source
     assert 'CHECKPOINT_REVISION = "hb-stage-v2"' in source
     assert '"phase":"translation_only"' in source
     assert '"worker_revision":AI_WORKER_REVISION' in source
@@ -69,3 +70,11 @@ def test_completed_checkpoint_skips_gpu_and_gpu_is_released():
     assert "Release temporary GPU kernel" in source
     assert "/delete-kernel" in source
     assert "BOT2_GPU_RELEASED" in source
+
+
+def test_source_stage_acquires_captions_on_cpu():
+    source = SOURCE.read_text(encoding="utf-8")
+    assert '"--write-subs","--write-auto-subs"' in source
+    assert '"--sub-format","json3"' in source
+    assert '"source-caption.%(ext)s"' in source
+    assert "BOT2_SOURCE_CAPTION" in source
