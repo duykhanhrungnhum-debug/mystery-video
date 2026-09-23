@@ -9,7 +9,8 @@ from urllib.request import Request, urlopen
 
 from mystery_video.kaggle_submit import KaggleClient
 
-AI_WORKER_REVISION = "3bf7f1507b3936b56ded8398b078131d72c0ac46"
+AI_WORKER_REVISION = "ea0ea10b1e1c94e3f66921dc35ac08e615847e32"
+CHECKPOINT_REVISION = "3bf7f1507b3936b56ded8398b078131d72c0ac46"
 AI_WORKER_URL = f"https://raw.githubusercontent.com/duykhanhrungnhum-debug/AI-/{AI_WORKER_REVISION}/hidden_beyond/longform_audio_worker_v3.py"
 
 
@@ -44,11 +45,13 @@ def main() -> None:
 
     runtime={
         "mode":"bot2",
+        "phase":"translation_only",
         "job_id":"bot2-"+video_id,
         "job_token":job["job_token"],
         "callback_base":job["callback_base"],
         "source_video_id":video_id,
         "worker_revision":AI_WORKER_REVISION,
+        "checkpoint_revision":CHECKPOINT_REVISION,
         "gpu_kernel_ref":gpu_ref,
         "mounted_source_glob":"/kaggle/input/**/source.mp4",
         "config":{
