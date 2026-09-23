@@ -89,6 +89,39 @@ try:
     if "video" not in kinds or "audio" not in kinds:
         raise RuntimeError("source_missing_audio_or_video_stream")
 
+    # Caption-first production path: acquire Chinese subtitles on CPU while the
+    # source downloader and anti-bot provider are already warm. Missing captions
+    # are not a failure; the AI worker will fall back to ASR only when needed.
+    caption_ok=False
+    try:
+        caption_cmd=[
+            sys.executable,"-m","yt_dlp",
+            "--no-playlist","--skip-download",
+            "--retries","2",
+            "--remote-components","ejs:npm",
+            "--js-runtimes","deno:"+deno,
+            "--extractor-args","youtube:player_client=mweb",
+            "--write-subs","--write-auto-subs",
+            "--sub-langs","zh-Hans,zh-CN,zh,zh-Hant,zh-TW",
+            "--sub-format","json3",
+            "-o","/kaggle/working/source-caption.%(ext)s",
+            JOB["source_url"],
+        ]
+        subprocess.run(caption_cmd,check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        caption_files=[
+            p for p in Path("/kaggle/working").glob("source-caption*.json3")
+            if p.is_file() and p.stat().st_size>200
+        ]
+        caption_ok=bool(caption_files)
+        print(
+            "BOT2_SOURCE_CAPTION",
+            "ready" if caption_ok else "missing",
+            [p.name for p in caption_files],
+            flush=True,
+        )
+    except Exception as caption_exc:
+        print("BOT2_SOURCE_CAPTION fallback_asr",repr(caption_exc),flush=True)
+
     try:
         provider.terminate()
     except Exception:
