@@ -78,3 +78,12 @@ def test_source_stage_acquires_captions_on_cpu():
     assert '"--sub-format","json3"' in source
     assert 'source-caption.%(ext)s' in source
     assert "BOT2_SOURCE_CAPTION" in source
+
+
+def test_gpu_release_clears_active_state():
+    edge = EDGE.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert '/gpu-released' in edge
+    assert 'gpu_kernel_ref:null' in edge
+    assert 'BOT2_GPU_STATE_CLEARED' in workflow
+    assert '$BOT2_API/gpu-released' in workflow
