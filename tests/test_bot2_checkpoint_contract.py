@@ -127,3 +127,29 @@ def test_completion_verifies_public_youtube_before_checkpoint_cleanup():
     cleanup_pos = source.index('.delete().eq("source_video_id",videoId)', state_pos)
     assert cleanup_pos > state_pos
     assert "checkpoint_cleanup_pending" in source
+
+
+def test_daily_refresh_is_fixed_source_only_and_runs_before_selection():
+    edge = EDGE.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'path.endsWith("/refresh-fixed-sources")' in edge
+    assert "for(const fixed of FIXED)" in edge
+    assert 'src.approval_status!=="approved"' in edge
+    assert 'String(v?.status?.privacyStatus||"")==="public"' in edge
+    assert 'String(v?.status?.license||"")==="creativeCommon"' in edge
+    assert "titleKey.includes(key)" in edge
+    assert 'source_url:"https://www.youtube.com/watch?v="+id' in edge
+    assert 'rights_status:"approved"' in edge
+    refresh_pos = workflow.index("/refresh-fixed-sources")
+    next_pos = workflow.index("$BOT2_API/next")
+    assert refresh_pos < next_pos
+    assert "BOT2_FIXED_SOURCE_REFRESH" in workflow
+
+
+def test_source_refresh_never_searches_for_new_channels():
+    edge = EDGE.read_text(encoding="utf-8")
+    assert "ytsearch" not in edge
+    assert "search.list" not in edge
+    assert "youtube/v3/search" not in edge
+    assert 'channelIdFromUrl(src.channel_url)' in edge
