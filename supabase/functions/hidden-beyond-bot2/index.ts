@@ -14,7 +14,7 @@ const FIXED=[
 ];
 const WORKER_STAGES=new Set([
   "source_downloading","source_ready","gpu_submitted","asr","translating",
-  "translation_repair","tts","mixing","youtube_upload","youtube_uploaded"
+  "translation_repair","translation_complete","tts","mixing","youtube_upload","youtube_uploaded"
 ]);
 
 function adminKey():string{
