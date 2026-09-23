@@ -115,3 +115,15 @@ def test_scheduled_run_uses_rotation_mode_and_manual_target_is_exact():
 
 def test_request_builder_compiles():
     compile(REQUEST.read_text(encoding="utf-8"), str(REQUEST), "exec")
+
+
+def test_completion_verifies_public_youtube_before_checkpoint_cleanup():
+    source = EDGE.read_text(encoding="utf-8")
+    assert "async function verifyPublicYoutubeVideo(" in source
+    assert 'privacy!=="public"' in source
+    assert '"youtube_verify_wrong_channel:"' in source
+    assert '["failed","rejected","deleted"].includes(uploadStatus)' in source
+    state_pos = source.index('state_success_failed')
+    cleanup_pos = source.index('.delete().eq("source_video_id",videoId)', state_pos)
+    assert cleanup_pos > state_pos
+    assert "checkpoint_cleanup_pending" in source
