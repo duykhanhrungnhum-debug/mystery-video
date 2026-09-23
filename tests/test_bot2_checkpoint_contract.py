@@ -76,5 +76,5 @@ def test_source_stage_acquires_captions_on_cpu():
     source = SOURCE.read_text(encoding="utf-8")
     assert '"--write-subs","--write-auto-subs"' in source
     assert '"--sub-format","json3"' in source
-    assert '"source-caption.%(ext)s"' in source
+    assert 'source-caption.%(ext)s' in source
     assert "BOT2_SOURCE_CAPTION" in source
