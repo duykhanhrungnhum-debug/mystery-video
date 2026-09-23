@@ -45,3 +45,8 @@ def test_workflow_has_separate_gpu_and_cpu_phases():
     assert "Follow CPU TTS mix and YouTube upload" in source
     assert "GPU processing did not finish within 90 minutes" not in source
     assert "timeout-minutes: 240" in source
+
+
+def test_submitters_compile():
+    compile(GPU.read_text(encoding="utf-8"), str(GPU), "exec")
+    compile(CPU.read_text(encoding="utf-8"), str(CPU), "exec")
