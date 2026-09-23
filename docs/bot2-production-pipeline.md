@@ -7,7 +7,8 @@ episode from the beginning after a later-stage failure.
 ## Production flow
 
 ```
-select episode
+refresh only the five fixed approved YouTube channels
+  -> select exactly one episode
   -> CPU source acquisition
   -> CPU Chinese-caption acquisition (preferred)
   -> ASR only when no usable captions exist
@@ -38,6 +39,23 @@ Phases are monotonic:
 A lower-ranked save must never overwrite a higher-ranked checkpoint. A same-rank
 save may only move the cursor forward. Existing translated text must not be
 erased by an ASR-only save.
+
+## Selection modes
+
+Bot2 has two deliberately different selection modes:
+
+- **Exact/manual:** a requested rotation + episode must match exactly. Missing,
+  invalid, completed, or conflicting targets stop before source download/GPU.
+  The controller must never substitute another rotation or episode.
+- **Scheduled/daily rotation:** refresh only the five fixed approved channels,
+  then start at `next_rotation`. If that source has no new approved episode,
+  check the next fixed source in rotation order. One workflow invocation claims
+  at most one episode.
+
+The pre-selection refresh never searches YouTube for new channels. It reads only
+the uploads playlists of the five fixed channel IDs, matches videos to the
+already tracked series, and only queues items whose current YouTube metadata is
+Public and Creative Commons.
 
 ## Resume rules
 
@@ -79,6 +97,9 @@ Failures are stage-local, not episode-global.
   automatically. After the code/model fix, resume from the preserved checkpoint.
 
 No failure is allowed to silently reset source, ASR, or translation work.
+A deterministic content-shape issue that can be normalized safely (for example,
+an overlong dialogue cue) is normalized and checkpointed rather than failing the
+whole episode.
 
 ## Quality rules
 
@@ -96,10 +117,12 @@ GPU savings must not lower output quality.
 
 A production run is complete only when evidence shows:
 
+- YouTube confirms the video exists on the configured Hidden Beyond channel;
+- YouTube confirms privacy = `public`;
 - controller state = `idle/completed`;
 - a non-empty YouTube video ID is recorded;
 - playlist/final DB completion succeeded;
-- episode checkpoint is removed.
+- episode checkpoint is removed only after final state succeeds.
 
 GitHub Actions success by itself is not proof that the YouTube episode completed.
 
@@ -113,3 +136,10 @@ Optimize in this order without reducing quality:
 4. Batch translation and TTS efficiently.
 5. Release GPU immediately after AI handoff.
 6. Measure stage durations and optimize the slowest remaining stage.
+
+## Known remaining optimization
+
+CPU TTS is intentionally outside the GPU path. A failed CPU TTS job currently
+restarts TTS from the beginning of that episode, while retaining the completed
+translation checkpoint so GPU translation is not repeated. Persistent TTS-chunk
+resume is a future CPU-time optimization, not a GPU-safety blocker.
