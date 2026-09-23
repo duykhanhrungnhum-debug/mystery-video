@@ -56,6 +56,22 @@ jobs:
             curl -fsSL               -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2"               | python -c 'import json,sys; print(json.load(sys.stdin)["value"])'
           }
           OIDC="$(get_oidc)"
+          if curl --fail-with-body --retry 2 --retry-delay 2 --retry-all-errors -sS -X POST "$BOT2_API/refresh-fixed-sources" \
+              -H "Authorization: Bearer $OIDC" \
+              -H "content-type: application/json" \
+              -d '{}' > bot2-source-refresh.json; then
+            python - <<'PY'
+          import json
+          d=json.load(open("bot2-source-refresh.json",encoding="utf-8"))
+          print(
+              "BOT2_FIXED_SOURCE_REFRESH",
+              "inserted="+str(d.get("inserted_count",0)),
+              "skipped="+str(len(d.get("skipped") or [])),
+          )
+          PY
+          else
+            echo "::warning title=Bot2 fixed-source refresh failed::Continuing with the already approved queue. Exact requests will still fail closed if the requested episode is unavailable."
+          fi
           python scripts/bot2_build_request.py \
             --event "$GITHUB_EVENT_NAME" \
             --trigger .github/bot2.trigger \
