@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 
 from mystery_video.kaggle_submit import KaggleClient
 
-AI_WORKER_REVISION = "ea0ea10b1e1c94e3f66921dc35ac08e615847e32"
+AI_WORKER_REVISION = "ee13877eedaeffaaa256210a2bb0c1e1be2ddc20"
 CHECKPOINT_REVISION = "3bf7f1507b3936b56ded8398b078131d72c0ac46"
 AI_WORKER_URL = f"https://raw.githubusercontent.com/duykhanhrungnhum-debug/AI-/{AI_WORKER_REVISION}/hidden_beyond/longform_audio_worker_v3.py"
 
