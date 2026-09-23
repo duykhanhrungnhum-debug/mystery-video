@@ -120,6 +120,24 @@ jobs:
           )
           PY
           fi
+          if [ "${run_job:-}" = "false" ]; then
+            :
+          fi
+          CPU_READY="$(python - <<'PY'
+import json
+d=json.load(open("bot2-job.json",encoding="utf-8"))
+print("true" if d.get("checkpoint_cpu_ready") else "false")
+PY
+)"
+          if [ "$CPU_READY" = "true" ]; then
+            echo "need_gpu=false" >> "$GITHUB_OUTPUT"
+            echo "BOT2_RESUME_STAGE translation_complete cpu_ready=true; GPU will be skipped"
+          else
+            echo "need_gpu=true" >> "$GITHUB_OUTPUT"
+            PHASE="$(python -c 'import json; d=json.load(open("bot2-job.json")); print(d.get("checkpoint_phase") or "source_ready")')"
+            CURSOR="$(python -c 'import json; d=json.load(open("bot2-job.json")); print(d.get("checkpoint_cursor") or 0)')"
+            echo "BOT2_RESUME_STAGE phase=$PHASE cursor=$CURSOR; GPU required only for unfinished AI stage"
+          fi
 
       - name: Submit CPU source job
         if: steps.claim.outputs.run_job == 'true' && steps.claim.outputs.reuse_source != 'true'
@@ -205,7 +223,7 @@ jobs:
           echo "BOT2_YOUTUBE_SESSION_READY"
 
       - name: Submit mounted-source GPU translation job
-        if: steps.claim.outputs.run_job == 'true'
+        if: steps.claim.outputs.run_job == 'true' && steps.claim.outputs.need_gpu == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -237,7 +255,7 @@ jobs:
           echo "BOT2_GPU_SUBMITTED ref=$GPU_REF"
 
       - name: Follow GPU translation checkpoint
-        if: steps.claim.outputs.run_job == 'true'
+        if: steps.claim.outputs.run_job == 'true' && steps.claim.outputs.need_gpu == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -270,6 +288,34 @@ jobs:
           PY
             curl -sS -X POST "$BOT2_API/fail" -H "Authorization: Bearer $OIDC" -H "content-type: application/json" --data-binary @fail.json || true
             exit 1
+          fi
+
+      - name: Release temporary GPU kernel
+        if: always() && steps.claim.outputs.run_job == 'true' && steps.claim.outputs.need_gpu == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ ! -f bot2-gpu-submission.json ]; then
+            echo "BOT2_GPU_RELEASE_SKIP no_submission_file"
+            exit 0
+          fi
+          GPU_REF="$(python -c 'import json; print(json.load(open("bot2-gpu-submission.json")).get("ref") or "")')"
+          if [ -z "$GPU_REF" ]; then
+            echo "BOT2_GPU_RELEASE_SKIP no_ref"
+            exit 0
+          fi
+          BROKER_OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-kaggle-broker" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          python - "$GPU_REF" <<'PY' > delete-gpu.json
+          import json,sys
+          print(json.dumps({"ref":sys.argv[1]}))
+          PY
+          if curl --fail-with-body -sS -X POST "$BOT2_KAGGLE_BROKER_URL/delete-kernel" \
+              -H "Authorization: Bearer $BROKER_OIDC" \
+              -H "content-type: application/json" \
+              --data-binary @delete-gpu.json > delete-gpu-result.json; then
+            echo "BOT2_GPU_RELEASED ref=$GPU_REF"
+          else
+            echo "::warning title=Bot2 GPU cleanup failed::Temporary GPU kernel cleanup failed; checkpoint remains safe."
           fi
 
       - name: Submit CPU TTS mix upload job
