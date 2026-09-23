@@ -1,5 +1,5 @@
-run=2026-09-23T10:20:00+07:00
+run=2026-09-23T14:05:00+07:00
 mode=production
 source_rotation=2
 episode=1
-process=checkpointed-stable-pipeline
+process=gpu-translation-cpu-tts-checkpoint
