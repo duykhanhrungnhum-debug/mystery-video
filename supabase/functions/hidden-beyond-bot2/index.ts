@@ -180,6 +180,27 @@ async function ensurePlaylist(db:any,token:string,series:any){
   if(u.error) throw new Error("playlist_save_failed:"+u.error.message);
   return String(b.id);
 }
+async function verifyPublicYoutubeVideo(token:string,videoId:string,expectedChannelId:string){
+  const url=new URL("https://www.googleapis.com/youtube/v3/videos");
+  url.searchParams.set("part","snippet,status");
+  url.searchParams.set("id",videoId);
+  const r=await fetch(url,{headers:{authorization:"Bearer "+token}});
+  const b=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error("youtube_verify_failed:"+r.status+":"+JSON.stringify(b));
+  const item=Array.isArray(b?.items)?b.items[0]:null;
+  if(!item) throw new Error("youtube_verify_video_missing:"+videoId);
+  const privacy=String(item?.status?.privacyStatus||"");
+  const uploadStatus=String(item?.status?.uploadStatus||"");
+  const channelId=String(item?.snippet?.channelId||"");
+  if(privacy!=="public")
+    throw new Error("youtube_verify_not_public:"+privacy);
+  if(expectedChannelId && channelId!==expectedChannelId)
+    throw new Error("youtube_verify_wrong_channel:"+channelId);
+  if(["failed","rejected","deleted"].includes(uploadStatus))
+    throw new Error("youtube_verify_bad_upload_status:"+uploadStatus);
+  return {privacy_status:privacy,upload_status:uploadStatus,channel_id:channelId};
+}
+
 async function addPlaylist(token:string,playlistId:string,videoId:string){
   const r=await fetch("https://www.googleapis.com/youtube/v3/playlistItems?part=snippet",{
     method:"POST",
@@ -439,6 +460,9 @@ async function completeJob(db:any,state:any,youtubeVideoId:string){
   if(seriesInfo.error) throw new Error("series_lookup_failed:"+seriesInfo.error.message);
 
   const yt=await youtubeAccess(db);
+  await verifyPublicYoutubeVideo(
+    yt.token,ytId,String(yt.connection.channel_id||"")
+  );
   const playlistId=await ensurePlaylist(db,yt.token,seriesInfo.data);
   await addPlaylist(yt.token,playlistId,ytId);
 
@@ -458,9 +482,6 @@ async function completeJob(db:any,state:any,youtubeVideoId:string){
   }).eq("id",fixed.series_id);
   if(su.error) throw new Error("series_progress_update_failed:"+su.error.message);
 
-  await db.from("hidden_beyond_bot2_checkpoints")
-    .delete().eq("source_video_id",videoId);
-
   const nextRotation=(fixed.rotation%5)+1;
   const u=await db.from("hidden_beyond_bot2_state").update({
     next_rotation:nextRotation,status:"idle",stage:"completed",
@@ -471,7 +492,24 @@ async function completeJob(db:any,state:any,youtubeVideoId:string){
     updated_at:new Date().toISOString()
   }).eq("id",1).select("*").single();
   if(u.error) throw new Error("state_success_failed:"+u.error.message);
-  return {next_rotation:nextRotation,state:u.data,episode_number:episode};
+
+  const cleanup=await db.from("hidden_beyond_bot2_checkpoints")
+    .delete().eq("source_video_id",videoId);
+  if(cleanup.error){
+    await db.from("hidden_beyond_bot2_state").update({
+      last_message:"Completed rotation "+fixed.rotation+" episode "+episode+
+        "; checkpoint cleanup pending: "+clip(cleanup.error.message,500),
+      updated_at:new Date().toISOString()
+    }).eq("id",1);
+    return {
+      next_rotation:nextRotation,state:u.data,episode_number:episode,
+      checkpoint_cleanup_pending:true
+    };
+  }
+  return {
+    next_rotation:nextRotation,state:u.data,episode_number:episode,
+    checkpoint_cleanup_pending:false
+  };
 }
 
 Deno.serve(async(req:Request)=>{
