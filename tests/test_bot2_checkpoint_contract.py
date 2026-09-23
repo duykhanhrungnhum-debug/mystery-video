@@ -3,6 +3,7 @@ from pathlib import Path
 GPU = Path("scripts/bot2_submit_gpu.py")
 CPU = Path("scripts/bot2_submit_cpu_tts.py")
 SOURCE = Path("scripts/bot2_submit_source.py")
+REQUEST = Path("scripts/bot2_build_request.py")
 WORKFLOW = Path(".github/workflows/hidden-beyond-bot2-vault.yml")
 EDGE = Path("supabase/functions/hidden-beyond-bot2/index.ts")
 
@@ -87,3 +88,30 @@ def test_gpu_release_clears_active_state():
     assert 'gpu_kernel_ref:null' in edge
     assert 'BOT2_GPU_STATE_CLEARED' in workflow
     assert '$BOT2_API/gpu-released' in workflow
+
+
+def test_exact_selection_never_falls_back_to_another_rotation():
+    edge = EDGE.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    request = REQUEST.read_text(encoding="utf-8")
+
+    assert 'selectionMode=String(request?.selection_mode||"rotation")==="exact"?"exact":"rotation"' in edge
+    assert "await peekExact(db,targetRotation,targetEpisode)" in edge
+    assert '"target_missing"' in edge
+    assert '"target_conflict"' in edge
+    assert '"already_completed"' in edge
+    assert "bot2-next-request.json" in workflow
+    assert "--verify-request bot2-next-request.json" in workflow
+    assert "BOT2_SELECTION_GUARD_OK" in request
+
+
+def test_scheduled_run_uses_rotation_mode_and_manual_target_is_exact():
+    source = REQUEST.read_text(encoding="utf-8")
+    assert 'if event == "schedule":' in source
+    assert '{"selection_mode": "rotation", "run_origin": "schedule"}' in source
+    assert 'elif trigger.get("source_rotation") and trigger.get("episode"):' in source
+    assert 'mode = "exact"' in source
+
+
+def test_request_builder_compiles():
+    compile(REQUEST.read_text(encoding="utf-8"), str(REQUEST), "exec")
