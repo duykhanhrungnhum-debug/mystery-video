@@ -1,13 +1,18 @@
 from pathlib import Path
 
 GPU = Path("scripts/bot2_submit_gpu.py")
+CPU = Path("scripts/bot2_submit_cpu_tts.py")
+WORKFLOW = Path(".github/workflows/hidden-beyond-bot2-vault.yml")
 EDGE = Path("supabase/functions/hidden-beyond-bot2/index.ts")
 
 
 def test_bot2_pins_worker_and_passes_revision():
     source = GPU.read_text(encoding="utf-8")
-    assert 'AI_WORKER_REVISION = "3bf7f1507b3936b56ded8398b078131d72c0ac46"' in source
+    assert 'AI_WORKER_REVISION = "ea0ea10b1e1c94e3f66921dc35ac08e615847e32"' in source
+    assert 'CHECKPOINT_REVISION = "3bf7f1507b3936b56ded8398b078131d72c0ac46"' in source
+    assert '"phase":"translation_only"' in source
     assert '"worker_revision":AI_WORKER_REVISION' in source
+    assert '"checkpoint_revision":CHECKPOINT_REVISION' in source
     assert '"ai_worker_revision":AI_WORKER_REVISION' in source
 
 
@@ -24,3 +29,19 @@ def test_success_cleans_translation_checkpoint():
     source = EDGE.read_text(encoding="utf-8")
     assert 'hidden_beyond_bot2_checkpoints' in source
     assert '.delete().eq("source_video_id",videoId)' in source
+
+
+def test_cpu_tts_worker_has_no_gpu_accelerator():
+    source = CPU.read_text(encoding="utf-8")
+    assert '"phase": "tts_only"' in source
+    assert "enable_gpu=False" in source
+    assert '"checkpoint_revision": CHECKPOINT_REVISION' in source
+
+
+def test_workflow_has_separate_gpu_and_cpu_phases():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    assert "Follow GPU translation checkpoint" in source
+    assert "Submit CPU TTS mix upload job" in source
+    assert "Follow CPU TTS mix and YouTube upload" in source
+    assert "GPU processing did not finish within 90 minutes" not in source
+    assert "timeout-minutes: 240" in source
