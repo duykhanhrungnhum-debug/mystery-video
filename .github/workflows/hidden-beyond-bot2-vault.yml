@@ -306,6 +306,17 @@ jobs:
               -H "content-type: application/json" \
               --data-binary @delete-gpu.json > delete-gpu-result.json; then
             echo "BOT2_GPU_RELEASED ref=$GPU_REF"
+            VIDEO_ID="$(python -c 'import json; print(json.load(open("bot2-job.json"))["item"]["source_item_id"])')"
+            BOT2_OIDC="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=hidden-beyond-bot2" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            python - "$VIDEO_ID" <<'PY' > gpu-released.json
+          import json,sys
+          print(json.dumps({"source_video_id":sys.argv[1]}))
+          PY
+            curl --fail-with-body -sS -X POST "$BOT2_API/gpu-released" \
+              -H "Authorization: Bearer $BOT2_OIDC" \
+              -H "content-type: application/json" \
+              --data-binary @gpu-released.json > /dev/null
+            echo "BOT2_GPU_STATE_CLEARED"
           else
             echo "::warning title=Bot2 GPU cleanup failed::Temporary GPU kernel cleanup failed; checkpoint remains safe."
           fi
