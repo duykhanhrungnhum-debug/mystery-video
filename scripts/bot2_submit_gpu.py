@@ -9,7 +9,8 @@ from urllib.request import Request, urlopen
 
 from mystery_video.kaggle_submit import KaggleClient
 
-AI_WORKER_URL = "https://raw.githubusercontent.com/duykhanhrungnhum-debug/AI-/main/hidden_beyond/longform_audio_worker_v3.py"
+AI_WORKER_REVISION = "6a47a3cb0848b72178e12d0346650d0234a91974"
+AI_WORKER_URL = f"https://raw.githubusercontent.com/duykhanhrungnhum-debug/AI-/{AI_WORKER_REVISION}/hidden_beyond/longform_audio_worker_v3.py"
 
 
 def fetch_ai_worker() -> str:
@@ -74,7 +75,7 @@ def main() -> None:
         enable_gpu=True,
         kernel_data_sources=[source_ref],
     )
-    result={"ref":sub.ref,"version_number":sub.version_number,"source_ref":source_ref,"source_video_id":video_id}
+    result={"ref":sub.ref,"version_number":sub.version_number,"source_ref":source_ref,"source_video_id":video_id,"ai_worker_revision":AI_WORKER_REVISION}
     Path(args.output).write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     print("BOT2_GPU_SUBMITTED",json.dumps(result,ensure_ascii=False))
 
