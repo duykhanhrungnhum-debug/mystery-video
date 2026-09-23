@@ -50,3 +50,22 @@ def test_workflow_has_separate_gpu_and_cpu_phases():
 def test_submitters_compile():
     compile(GPU.read_text(encoding="utf-8"), str(GPU), "exec")
     compile(CPU.read_text(encoding="utf-8"), str(CPU), "exec")
+
+
+def test_checkpoint_state_machine_is_monotonic():
+    source = EDGE.read_text(encoding="utf-8")
+    assert "asr_complete:10" in source
+    assert "translating:20" in source
+    assert "translation_complete:30" in source
+    assert 'oldRank>newRank' in source
+    assert 'finalPayload={...oldPayload,...payload}' in source
+    assert 'checkpoint_cpu_ready' in source
+
+
+def test_completed_checkpoint_skips_gpu_and_gpu_is_released():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    assert 'steps.claim.outputs.need_gpu == \'true\'' in source
+    assert "BOT2_RESUME_STAGE translation_complete cpu_ready=true; GPU will be skipped" in source
+    assert "Release temporary GPU kernel" in source
+    assert "/delete-kernel" in source
+    assert "BOT2_GPU_RELEASED" in source
