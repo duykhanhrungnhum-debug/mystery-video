@@ -1,33 +1,72 @@
 {
-  "bot_version": "bot2-simple-v1",
+  "bot_version": "bot2-production-v1",
   "production_repo": "duykhanhrungnhum-debug/mystery-video",
   "ai_repo": "duykhanhrungnhum-debug/AI-",
+  "production_workflow": ".github/workflows/hidden-beyond-bot2-vault.yml",
+  "maintenance_workflows": [
+    ".github/workflows/hidden-beyond-bot2-cleanup.yml"
+  ],
+  "ci_workflows": [
+    ".github/workflows/test.yml"
+  ],
+  "legacy_workflows_archived": true,
   "source_pool": "config/hidden_beyond_fixed_sources.json",
   "source_discovery": false,
-  "workflow_count_target": 1,
+  "one_episode_per_job": true,
   "stages": [
+    "refresh_fixed_sources",
     "select_fixed_source_episode",
     "acquire_source_cpu",
     "verify_source_media",
-    "ai_asr_translate_tts",
-    "mix_preserve_original_visuals",
+    "acquire_source_captions_cpu",
+    "asr_only_if_needed",
+    "checkpoint_asr_complete",
+    "gpu_contextual_translate_and_bounded_repair",
+    "checkpoint_translation_complete",
+    "release_gpu",
+    "cpu_vieneu_tts",
+    "cpu_ffmpeg_timing_and_original_audio_mix",
     "verify_output",
-    "youtube_upload_public",
-    "advance_rotation"
+    "youtube_resumable_upload_public",
+    "verify_youtube_public_channel",
+    "playlist_and_db_finalize",
+    "advance_rotation",
+    "delete_completed_checkpoint"
   ],
-  "gpu_gate": "source_verified",
+  "checkpoint_revision": "hb-stage-v2",
+  "resume_from_last_verified_stage": true,
+  "gpu_policy": {
+    "gate": "source_verified_and_ai_work_unfinished",
+    "asr_fallback_only": true,
+    "translation_only_when_needed": true,
+    "release_immediately_after_ai_handoff": true,
+    "tts_on_gpu": false,
+    "mix_on_gpu": false,
+    "upload_on_gpu": false
+  },
   "translation": {
     "model": "tencent/Hy-MT2-7B",
     "passes": 1,
-    "targeted_repair_passes_max": 1
+    "targeted_repair_passes_max": 1,
+    "preserve_accepted_segments": true
   },
   "tts": {
     "engine": "VieNeu-TTS v3 Turbo",
-    "voice": "Minh Quân Pro"
+    "voice": "Minh Quân Pro",
+    "device": "cpu"
   },
   "retry_policy": {
     "transient_transport": "bounded",
-    "terminal_logic_error": "stop",
+    "terminal_logic_error": "stop_with_stage_evidence",
     "full_episode_rerun_for_single_segment": false
-  }
+  },
+  "completion_requires": [
+    "youtube_video_exists",
+    "youtube_channel_matches",
+    "youtube_privacy_public",
+    "youtube_video_id_recorded",
+    "playlist_finalized",
+    "database_finalized",
+    "controller_idle_completed"
+  ]
 }

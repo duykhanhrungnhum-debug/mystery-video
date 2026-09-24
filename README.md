@@ -1,78 +1,91 @@
-# Mystery Video
+# Hidden Beyond Bot2
 
-Minimal pipeline for collecting and publishing videos from sources with explicit reuse rights.
+This repository has one production path for the Hidden Beyond YouTube channel.
+Older science/story experiments are retained only as historical code and must not
+be used as production entry points.
 
-## Current MVP
+## Single production source of truth
 
-1. Keep a small list of trusted sources in Supabase.
-2. Discover new video metadata from an RSS/Atom feed.
-3. Store candidates in Supabase and avoid duplicates.
-4. Require item-level rights evidence before any download/upload step.
-5. Later connect YouTube OAuth and upload only rights-cleared items.
+Production contract:
 
-This project does **not** download or re-upload arbitrary YouTube videos. A public YouTube video is not automatically reusable; YouTube documents Standard and Creative Commons licenses separately, and CC BY reuse requires attribution. Rights must be established for the specific item before publication.
+- `docs/bot2-production-pipeline.md`
+- `config/hidden_beyond_bot2_pipeline.json`
+- `config/hidden_beyond_fixed_sources.json`
 
-## Seeded sources
+Active GitHub Actions:
 
-The Supabase database currently contains five research/media sources:
+1. `.github/workflows/hidden-beyond-bot2-vault.yml` — the only production episode workflow.
+2. `.github/workflows/hidden-beyond-bot2-cleanup.yml` — maintenance-only stale GPU cleanup.
+3. `.github/workflows/test.yml` — CI tests only.
 
-1. NASA Scientific Visualization Studio - NASA says SVS content is public domain unless otherwise noted; some visualizations contain separately licensed music.
-2. NOAA Fisheries Video Gallery - NOAA Fisheries says its narrative videos can be used without permission when shown in full, while third-party clips in those videos may not be extracted; public-domain b-roll packages are also available.
-3. NOAA Science On a Sphere - NOAA says digital media it creates is generally not copyrighted, but individual items can have third-party restrictions.
-4. U.S. Geological Survey Multimedia - USGS-authored or produced information is U.S. public domain, while third-party material can be separately protected.
-5. Library of Congress National Screening Room - many motion pictures have no known U.S. copyright restrictions, but rights are checked per item and exceptions exist.
+Legacy workflows are stored under `docs/legacy-workflows/` and are not executable
+by GitHub Actions.
 
-These policies are source guidance, not blanket permission for every file. The app therefore blocks downloads unless the individual item is marked rights-verified.
+## Production flow
 
-## Project layout
+```text
+refresh only the five fixed approved channels
+-> select exactly one sequential episode
+-> acquire and verify source on CPU
+-> acquire usable Chinese captions on CPU when available
+-> ASR only when captions are unavailable
+-> durable checkpoint
+-> GPU contextual translation / bounded targeted repair
+-> durable translation checkpoint
+-> release GPU immediately
+-> CPU VieNeu TTS
+-> CPU/ffmpeg timing + original music/SFX mix
+-> verify final media
+-> YouTube resumable upload as Public
+-> verify video exists on Hidden Beyond and privacy=public
+-> add/update series playlist and DB
+-> advance rotation
+-> remove completed checkpoint
+```
 
-- `src/mystery_video/collector.py` - feed discovery and deduplication
-- `src/mystery_video/rights.py` - item-level rights gate
-- `src/mystery_video/db.py` - Supabase access
-- `src/mystery_video/cli.py` - minimal command-line entry point
-- `tests/` - local tests
-- `.github/workflows/test.yml` - CI test workflow
-- `.env.example` - required environment variables
+## Fixed-source policy
 
-## Environment
+- Bot2 uses only the five configured sources in `config/hidden_beyond_fixed_sources.json`.
+- Bot2 does not discover or add new channels.
+- Episodes are processed sequentially from episode 1 onward.
+- Scheduled rotation is 1 -> 2 -> 3 -> 4 -> 5 -> repeat.
+- If the current source has no new eligible episode, scheduled mode checks the next fixed source.
+- Exact/manual mode never substitutes a different source or episode.
 
-Copy `.env.example` to `.env` and provide:
+## Resume and GPU policy
 
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+Failures are stage-local. Bot2 resumes from the last durable checkpoint instead of
+restarting the episode.
 
-The service-role key is server-side only. Never put it in a browser, mobile app, public repository, or client-side bundle.
+- Reuse an already verified source.
+- Reuse captions/ASR already completed.
+- Continue translation after the saved cursor.
+- If translation is complete, skip GPU entirely.
+- TTS, audio mix, remux and upload run on CPU.
+- Release temporary GPU kernels immediately after the AI stage.
+- If YouTube accepted an upload but the final callback failed, recover that upload
+  instead of rendering or uploading again.
 
-## First run
+## Completion rule
+
+A run is complete only when all of these are true:
+
+- the YouTube video exists on the configured Hidden Beyond channel;
+- privacy is `public`;
+- a non-empty YouTube video ID is recorded;
+- playlist and final database completion succeed;
+- controller state is `idle/completed`;
+- the episode checkpoint is removed after successful finalization.
+
+GitHub Actions `success` alone is not proof that an episode completed.
+
+## Development
+
+Run CI locally with:
 
 ```bash
 python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-The YouTube OAuth upload step is intentionally not wired yet. It will be added after the collector and rights gate are verified.
-
-
-## Ordered public-domain story pipeline
-
-The channel is transitioning from science-footage reuse toward Vietnamese story videos built from rights-cleared source texts.
-
-Current story ingestion rules:
-
-- A series is collected strictly from episode/chapter 1 upward.
-- The database records the last collected episode and the next expected episode.
-- Once the backlog is caught up, the collector probes only for the next episode and continues sequentially.
-- Missing expected episodes stop the series instead of silently skipping ahead.
-- Public-domain source text is treated as raw material; generated narration/video is a separate production stage.
-
-Current verified source-text families include Chinese Wikisource editions of Journey to the West, Romance of the Three Kingdoms, Water Margin, Investiture of the Gods, and Strange Tales from a Chinese Studio.
-
-Story processing is intentionally split into stages. The first processor creates a Vietnamese narration script, a Vietnamese voice track, scene prompts, and a private placeholder preview. Placeholder previews are never eligible for automatic YouTube publication. A later visual-generation stage must replace the placeholder with approved AI-generated visuals before an episode can become publish-ready.
-
-Commercial-use guardrails for the current local models:
-
-- Translation: `Helsinki-NLP/opus-mt-zh-vi` (Apache-2.0).
-- Narration rewrite: `Qwen/Qwen2.5-0.5B-Instruct` (Apache-2.0).
-- Vietnamese TTS proof pipeline: Piper `vi_VN-vais1000-medium`; retain the model/dataset attribution required by its model card.
-
-The older NLLB processor remains only for the earlier science-video experiment. It is not used by the new story pipeline because the NLLB model is CC-BY-NC and therefore is not selected for a monetization-oriented production path.
+Do not place server-side Supabase credentials in browser/mobile/client code.

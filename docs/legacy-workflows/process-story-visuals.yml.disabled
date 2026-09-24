@@ -1,0 +1,5 @@
+name: Hidden Beyond Story Visual Worker
+
+# ARCHIVED: legacy workflow, not part of Hidden Beyond Bot2 production.
+# Stored outside .github/workflows so GitHub Actions cannot run it.
+# Original file preserved in Git history at/before commit d192fdba4766234caf2ba993ed1143f78564340b.
