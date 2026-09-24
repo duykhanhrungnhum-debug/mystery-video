@@ -431,7 +431,21 @@ async function ingestFixedFallbackCandidates(db:any,body:any){
       updated_at:new Date().toISOString()
     }).eq("id",seriesId);
     if(su.error) throw new Error("fallback_series_update_failed:"+su.error.message);
-    await saveSourceHealth(db,sourceId,"healthy","yt_dlp_fixed_source_fallback_ok",{accepted:accepted.length});
+
+    const acceptedIds=new Set(accepted.map((x:any)=>String(x.source_item_id||"")));
+    const liveChannel=meta
+      .filter((v:any)=>acceptedIds.has(String(v?.id||"")))
+      .map((v:any)=>String(v?.snippet?.channelId||""))
+      .find((x:string)=>Boolean(x))||"";
+    if(liveChannel){
+      const srcUpdate=await db.from("sources").update({
+        channel_url:"https://www.youtube.com/channel/"+liveChannel
+      }).eq("id",sourceId);
+      if(srcUpdate.error) throw new Error("fallback_source_channel_save_failed:"+srcUpdate.error.message);
+    }
+    await saveSourceHealth(db,sourceId,"healthy","yt_dlp_fixed_source_fallback_ok",{
+      accepted:accepted.length,live_channel_id:liveChannel||null
+    });
   }
   return {accepted:accepted.length,items:accepted,rejected};
 }

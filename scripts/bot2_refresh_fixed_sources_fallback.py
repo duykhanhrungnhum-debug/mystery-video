@@ -51,12 +51,12 @@ def discover(source: dict) -> list[dict]:
     key = norm(str(source.get("series_title") or ""))
     if not key:
         return []
+    found_by_id = {}
     for url in channel_candidates(source):
         try:
             data = ytdlp_json(url, flat=True)
         except Exception:
             continue
-        found = []
         for entry in data.get("entries") or []:
             if not isinstance(entry, dict):
                 continue
@@ -64,16 +64,14 @@ def discover(source: dict) -> list[dict]:
             title = str(entry.get("title") or "").strip()
             if not vid or key not in norm(title):
                 continue
-            found.append({
+            found_by_id.setdefault(vid, {
                 "source_item_id": vid,
                 "title": title,
                 "episode_number": episode_number(title),
                 "source_channel_id": str(entry.get("channel_id") or ""),
                 "source_published_at": None,
             })
-        if found:
-            return found
-    return []
+    return list(found_by_id.values())
 
 
 def main() -> None:

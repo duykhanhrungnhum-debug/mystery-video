@@ -206,3 +206,12 @@ def test_exact_missing_is_visible_failure_after_fallback():
 
 def test_fallback_submitter_compiles():
     compile(FALLBACK.read_text(encoding="utf-8"), str(FALLBACK), "exec")
+
+
+def test_fallback_aggregates_live_seed_channels_and_self_heals_channel_url():
+    fallback = FALLBACK.read_text(encoding="utf-8")
+    edge = EDGE.read_text(encoding="utf-8")
+    assert "found_by_id" in fallback
+    assert "return list(found_by_id.values())" in fallback
+    assert '"https://www.youtube.com/channel/"+liveChannel' in edge
+    assert '"fallback_source_channel_save_failed:"' in edge
