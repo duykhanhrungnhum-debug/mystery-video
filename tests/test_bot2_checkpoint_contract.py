@@ -162,3 +162,13 @@ def test_source_refresh_paginates_channel_uploads_for_sequential_backfill():
     assert 'pageToken=String(pl?.nextPageToken||"")' in edge
     assert 'if(!pageToken) break' in edge
     assert 'uploadIds.push(...ids)' in edge
+
+
+def test_fixed_source_channel_recovers_from_verified_seed_video():
+    edge = EDGE.read_text(encoding="utf-8")
+    assert "uploadsPlaylistFor" in edge
+    assert '"channel_recovery_seed_lookup_failed:"' in edge
+    assert '.eq("rights_status","approved")' in edge
+    assert 'snippet?.channelId' in edge
+    assert '"verified_seed_video"' in edge
+    assert 'channel_url:canonicalUrl' in edge

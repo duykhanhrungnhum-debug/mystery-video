@@ -198,13 +198,56 @@ async function refreshFixedSources(db:any){
       continue;
     }
 
-    const chUrl=new URL("https://www.googleapis.com/youtube/v3/channels");
-    chUrl.searchParams.set("part","contentDetails");
-    chUrl.searchParams.set("id",channelId);
-    const ch=await youtubeJson(yt.token,chUrl);
-    const uploads=String(ch?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads||"");
+    async function uploadsPlaylistFor(candidateChannelId:string):Promise<string>{
+      const chUrl=new URL("https://www.googleapis.com/youtube/v3/channels");
+      chUrl.searchParams.set("part","contentDetails");
+      chUrl.searchParams.set("id",candidateChannelId);
+      const ch=await youtubeJson(yt.token,chUrl);
+      return String(ch?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads||"");
+    }
+
+    let resolvedChannelId=channelId;
+    let uploads=await uploadsPlaylistFor(resolvedChannelId);
     if(!uploads){
-      skipped.push({source_id:fixed.source_id,reason:"uploads_playlist_missing"});
+      // Recover the canonical channel from an already VERIFIED source item.
+      // YouTube video IDs do not move between channels, so the live snippet
+      // channelId is a safer anchor than a stale stored channel URL.
+      const seedQ=await db.from("source_items")
+        .select("source_item_id")
+        .eq("source_id",fixed.source_id)
+        .eq("series_id",fixed.series_id)
+        .eq("rights_status","approved")
+        .order("episode_number",{ascending:true})
+        .limit(3);
+      if(seedQ.error) throw new Error("channel_recovery_seed_lookup_failed:"+seedQ.error.message);
+      const seedIds=(seedQ.data||[]).map((x:any)=>String(x.source_item_id||"")).filter(Boolean);
+      const seedMeta=await youtubeVideosByIds(yt.token,seedIds);
+      const recoveredChannelId=String(seedMeta?.[0]?.snippet?.channelId||"");
+      if(recoveredChannelId && recoveredChannelId!==resolvedChannelId){
+        const recoveredUploads=await uploadsPlaylistFor(recoveredChannelId);
+        if(recoveredUploads){
+          resolvedChannelId=recoveredChannelId;
+          uploads=recoveredUploads;
+          const canonicalUrl="https://www.youtube.com/channel/"+recoveredChannelId;
+          const su=await db.from("sources").update({
+            channel_url:canonicalUrl,
+          }).eq("id",fixed.source_id);
+          if(su.error) throw new Error("channel_recovery_save_failed:"+su.error.message);
+          observed.push({
+            source_id:fixed.source_id,
+            series_id:fixed.series_id,
+            recovered_channel_id:recoveredChannelId,
+            recovery:"verified_seed_video",
+          });
+        }
+      }
+    }
+    if(!uploads){
+      skipped.push({
+        source_id:fixed.source_id,
+        reason:"uploads_playlist_missing",
+        stored_channel_id:channelId,
+      });
       continue;
     }
 
