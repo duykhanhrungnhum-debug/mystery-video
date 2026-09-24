@@ -10,8 +10,8 @@ EDGE = Path("supabase/functions/hidden-beyond-bot2/index.ts")
 
 def test_bot2_pins_worker_and_passes_revision():
     source = GPU.read_text(encoding="utf-8")
-    assert 'AI_WORKER_REVISION = "50cffe78e9ae67a3c2fa4b73cff6a4b18cd4eb80"' in source
-    assert 'CHECKPOINT_REVISION = "hb-stage-v2"' in source
+    assert 'AI_WORKER_REVISION = "09b590f103e0cb31b3242fb0394e4aa3a32244d3"' in source
+    assert 'CHECKPOINT_REVISION = "hb-stage-v3-mastery-sync"' in source
     assert '"phase":"translation_only"' in source
     assert '"worker_revision":AI_WORKER_REVISION' in source
     assert '"checkpoint_revision":CHECKPOINT_REVISION' in source

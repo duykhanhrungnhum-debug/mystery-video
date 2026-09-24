@@ -26,7 +26,7 @@ refresh only the five fixed approved YouTube channels
 
 ## Checkpoint contract
 
-Checkpoint schema revision: `hb-stage-v2`.
+Checkpoint schema revision: `hb-stage-v3-mastery-sync`.
 
 Phases are monotonic:
 
@@ -104,6 +104,26 @@ whole episode.
 ## Quality rules
 
 GPU savings must not lower output quality.
+
+Translation mastery profile:
+- Use context before/after the current cue and accepted prior Vietnamese lines.
+- Keep xianxia roles, honorifics, names, realms, sect terms, idioms, negation,
+  numbers and emotional force consistent across the episode.
+- In xianxia scenes, do not default to modern `tôi/bạn` when the relationship
+  calls for `ta/ngươi/nàng/hắn` or role-based forms.
+- Short Chinese dialogue should remain concise Vietnamese dialogue rather than
+  being expanded into explanations.
+- Flag unnatural modern pronouns and verbose short-line translations for one
+  bounded targeted repair pass.
+
+Dubbing synchronization:
+- Place each Vietnamese cue inside a source-dialogue timing window derived from
+  the original cue and its neighboring cues.
+- Allow only small pre-roll/post-roll around the original speech window.
+- Fit translation length to realistic TTS cadence before synthesis.
+- Finish a cue before the next source cue whenever possible; hard trimming is a
+  last-resort fallback and is recorded in output metadata.
+- Record maximum start shift and end overrun for sync diagnostics.
 
 - Translation remains context-aware and genre-aware.
 - Deterministic gates reject empty Vietnamese, leaked CJK, and repetition loops.

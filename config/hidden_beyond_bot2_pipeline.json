@@ -33,7 +33,7 @@
     "advance_rotation",
     "delete_completed_checkpoint"
   ],
-  "checkpoint_revision": "hb-stage-v2",
+  "checkpoint_revision": "hb-stage-v3-mastery-sync",
   "resume_from_last_verified_stage": true,
   "gpu_policy": {
     "gate": "source_verified_and_ai_work_unfinished",
@@ -48,12 +48,23 @@
     "model": "tencent/Hy-MT2-7B",
     "passes": 1,
     "targeted_repair_passes_max": 1,
-    "preserve_accepted_segments": true
+    "preserve_accepted_segments": true,
+    "mastery_profile": "professional-zh-vi-v2",
+    "context_window": {
+      "source_before": 4,
+      "source_after": 4,
+      "translated_before": 3
+    },
+    "xianxia_pronoun_consistency": true,
+    "concise_dialogue_gate": true
   },
   "tts": {
     "engine": "VieNeu-TTS v3 Turbo",
     "voice": "Minh Quân Pro",
-    "device": "cpu"
+    "device": "cpu",
+    "sync_policy": "source_dialogue_window_v2",
+    "max_tempo": 1.28,
+    "min_pause_between_cues": 0.08
   },
   "retry_policy": {
     "transient_transport": "bounded",
