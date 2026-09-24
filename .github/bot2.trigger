@@ -1,5 +1,6 @@
-run=2026-09-23T16:32:00+07:00
+run=2026-09-24T09:46:00+07:00
 mode=production
-source_rotation=2
+selection_mode=exact
+source_rotation=1
 episode=2
-process=resume-source-overlong-cue-recovery-v2
+process=mastery-translation-source-dialogue-sync-v3
