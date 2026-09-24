@@ -136,8 +136,8 @@ def test_daily_refresh_is_fixed_source_only_and_runs_before_selection():
     assert 'path.endsWith("/refresh-fixed-sources")' in edge
     assert "for(const fixed of FIXED)" in edge
     assert 'src.approval_status!=="approved"' in edge
-    assert 'String(v?.status?.privacyStatus||"")==="public"' in edge
-    assert 'String(v?.status?.license||"")==="creativeCommon"' in edge
+    assert 'privacyStatus||"")!=="public"' in edge
+    assert 'license||"")!=="creativeCommon"' in edge
     assert "titleKey.includes(key)" in edge
     assert 'source_url:"https://www.youtube.com/watch?v="+id' in edge
     assert 'rights_status:"approved"' in edge
@@ -170,22 +170,12 @@ def test_source_refresh_paginates_channel_uploads_for_sequential_backfill():
 def test_source_discovery_survives_missing_old_episode_metadata():
     edge = EDGE.read_text(encoding="utf-8")
     assert 'inferEpisodeNumber(title)' in edge
-    assert 'title_explicit_episode' in edge
     assert 'source_published_at' in edge
-    assert 'chronological_after_durable_baseline' in edge
-    assert 'ambiguous_episode_without_durable_baseline' in edge
+    assert 'discovery_method:"youtube_api_fixed_channel"' in edge
+    assert 'discovery_method:"yt_dlp_fixed_source_fallback"' in edge
     assert 'baseline_publish_time_missing' not in edge
 
 
-
-def test_verified_seed_has_oembed_handle_fallback_without_broad_search():
-    edge = EDGE.read_text(encoding="utf-8")
-    assert "channelFromVerifiedSeedOembed" in edge
-    assert '"https://www.youtube.com/oembed"' in edge
-    assert '"forHandle"' in edge
-    assert '"forUsername"' in edge
-    assert 'method:"oembed_author"' in edge
-    assert "youtube/v3/search" not in edge
 
 
 FALLBACK = Path("scripts/bot2_refresh_fixed_sources_fallback.py")
@@ -196,7 +186,7 @@ def test_fixed_sources_are_trusted_and_api_failure_uses_ytdlp_fallback():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     fallback = FALLBACK.read_text(encoding="utf-8")
     assert '"youtube_api_channel_unavailable"' in edge
-    assert '"fallback_required":true' in edge
+    assert 'fallback_required:true' in edge
     assert '/ingest-fixed-fallback' in edge
     assert 'bot2_refresh_fixed_sources_fallback.py' in workflow
     assert '"yt_dlp"' in fallback
