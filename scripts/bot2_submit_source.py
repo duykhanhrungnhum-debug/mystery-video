@@ -39,7 +39,21 @@ def stage(name,message,**extra):
     print("BOT2_SOURCE_STAGE",json.dumps(payload,ensure_ascii=False),flush=True)
     post("/worker-stage",payload)
 
+cookie_path=Path("/tmp/hidden-beyond-youtube-cookies.txt")
+cookie_args=[]
 try:
+    try:
+        cookie_response=post("/youtube-cookie",{"source_video_id":JOB["source_video_id"]})
+        cookie_text=str(cookie_response.get("cookies") or "")
+        if cookie_text.startswith("# Netscape HTTP Cookie File") or cookie_text.startswith("# HTTP Cookie File"):
+            cookie_path.write_text(cookie_text,encoding="utf-8")
+            cookie_path.chmod(0o600)
+            cookie_args=["--cookies",str(cookie_path)]
+            print("BOT2_SOURCE_AUTH cookie_vault=ready",flush=True)
+        else:
+            print("BOT2_SOURCE_AUTH cookie_vault=invalid_format",flush=True)
+    except Exception:
+        print("BOT2_SOURCE_AUTH cookie_vault=not_configured",flush=True)
     stage("source_downloading","Kaggle CPU is acquiring the fixed-source episode")
     subprocess.check_call([
         sys.executable,"-m","pip","install","--quiet","-U",
@@ -109,6 +123,7 @@ try:
         cmd=[
             sys.executable,"-m","yt_dlp",
             "--no-playlist","--retries","2","--fragment-retries","2",
+            *cookie_args,
             "--remote-components","ejs:npm",
             "--js-runtimes","deno:"+deno,
             "--extractor-args",strategy["extractor"],
@@ -141,6 +156,7 @@ try:
                 sys.executable,"-m","yt_dlp",
                 "--no-playlist","--skip-download",
                 "--retries","1",
+                *cookie_args,
                 "--remote-components","ejs:npm",
                 "--js-runtimes","deno:"+deno,
                 "--extractor-args","youtube:player_client="+caption_client,
@@ -191,7 +207,16 @@ except Exception as exc:
             "error":repr(exc),
         })
     finally:
+        try:
+            cookie_path.unlink(missing_ok=True)
+        except Exception:
+            pass
         raise
+finally:
+    try:
+        cookie_path.unlink(missing_ok=True)
+    except Exception:
+        pass
 '''.replace("__JOB__", repr({
         "callback_base": job["callback_base"],
         "job_token": job["job_token"],

@@ -251,3 +251,18 @@ def test_source_download_has_bounded_youtube_client_fallbacks():
     assert 'BOT2_SOURCE_DOWNLOAD_STRATEGY' in source
     assert 'for strategy in strategies:' in source
     assert 'valid_source()' in source
+
+
+def test_source_downloader_uses_vault_cookie_without_persisting_it():
+    source = SOURCE.read_text(encoding="utf-8")
+    edge = EDGE.read_text(encoding="utf-8")
+    assert 'post("/youtube-cookie"' in source
+    assert 'Path("/tmp/hidden-beyond-youtube-cookies.txt")' in source
+    assert 'cookie_args=["--cookies",str(cookie_path)]' in source
+    assert '*cookie_args' in source
+    assert 'cookie_path.unlink(missing_ok=True)' in source
+    assert '/youtube-cookie' in edge
+    assert 'authorizeWorker(req,db,body)' in edge
+    assert 'get_hidden_beyond_youtube_cookies' in edge
+    assert '"cache-control":"no-store"' in edge
+    assert '/youtube-cookie-status' in edge

@@ -945,6 +945,16 @@ Deno.serve(async(req:Request)=>{
       return Response.json({ok:true,stage:"completed",...result});
     }
 
+    if(path.endsWith("/youtube-cookie")){
+      await authorizeWorker(req,db,body);
+      const secret=await db.rpc("get_hidden_beyond_youtube_cookies");
+      if(secret.error) throw new Error("youtube_cookie_vault_read_failed:"+secret.error.message);
+      const cookies=String(secret.data||"");
+      const valid=cookies.startsWith("# Netscape HTTP Cookie File")||cookies.startsWith("# HTTP Cookie File");
+      if(!valid) return Response.json({ok:false,error:"youtube_cookie_not_configured"},{status:404,headers:{"cache-control":"no-store"}});
+      return Response.json({ok:true,cookies},{headers:{"cache-control":"no-store"}});
+    }
+
     await authorizeGitHub(req);
 
     if(path.endsWith("/refresh-fixed-sources")){
@@ -1010,6 +1020,13 @@ Deno.serve(async(req:Request)=>{
       return Response.json({ok:true,stage:"config_blocked",state:u.data});
     }
 
+    if(path.endsWith("/youtube-cookie-status")){
+      const secret=await db.rpc("get_hidden_beyond_youtube_cookies");
+      if(secret.error) throw new Error("youtube_cookie_vault_status_failed:"+secret.error.message);
+      const cookies=String(secret.data||"");
+      const configured=cookies.startsWith("# Netscape HTTP Cookie File")||cookies.startsWith("# HTTP Cookie File");
+      return Response.json({ok:true,configured});
+    }
     if(path.endsWith("/status")) return Response.json({ok:true,state:await loadState(db)});
     if(path.endsWith("/peek")){
       const state=await loadState(db);
