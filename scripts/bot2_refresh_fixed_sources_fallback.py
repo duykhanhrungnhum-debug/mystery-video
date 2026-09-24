@@ -20,6 +20,12 @@ def episode_number(title: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def youtube_video_id(url: str) -> str:
+    text = str(url or "").strip()
+    m = re.search(r"(?:[?&]v=|youtu\.be/|youtube\.com/shorts/)([A-Za-z0-9_-]{11})", text)
+    return m.group(1) if m else ""
+
+
 def ytdlp_json(url: str, flat: bool = False) -> dict:
     cmd = [sys.executable, "-m", "yt_dlp", "--quiet", "--no-warnings", "--dump-single-json"]
     if flat:
@@ -52,6 +58,18 @@ def discover(source: dict) -> list[dict]:
     if not key:
         return []
     found_by_id = {}
+    # Seed URLs are already fixed/admin-provided. Emit their video IDs directly;
+    # the Edge Function validates title/public/license via YouTube Data API.
+    for seed in source.get("seed_video_urls") or []:
+        vid = youtube_video_id(str(seed))
+        if vid:
+            found_by_id.setdefault(vid, {
+                "source_item_id": vid,
+                "title": "",
+                "episode_number": 0,
+                "source_channel_id": "",
+                "source_published_at": None,
+            })
     for url in channel_candidates(source):
         try:
             data = ytdlp_json(url, flat=True)

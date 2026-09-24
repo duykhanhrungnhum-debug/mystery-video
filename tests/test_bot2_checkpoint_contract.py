@@ -215,3 +215,10 @@ def test_fallback_aggregates_live_seed_channels_and_self_heals_channel_url():
     assert "return list(found_by_id.values())" in fallback
     assert '"https://www.youtube.com/channel/"+liveChannel' in edge
     assert '"fallback_source_channel_save_failed:"' in edge
+
+
+def test_seed_ids_go_directly_to_api_before_ytdlp_channel_discovery():
+    fallback = FALLBACK.read_text(encoding="utf-8")
+    assert "def youtube_video_id" in fallback
+    assert "Seed URLs are already fixed/admin-provided" in fallback
+    assert '"source_item_id": vid' in fallback
