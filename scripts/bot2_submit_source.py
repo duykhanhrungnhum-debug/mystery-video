@@ -90,13 +90,13 @@ try:
             "format":"b[height<=480]/b",
         },
         {
-            "name":"web_safari_hls",
-            "extractor":"youtube:player_client=web_safari",
-            "format":"b[height<=480][protocol*=m3u8]/b[protocol*=m3u8]/b[height<=480]/b",
+            "name":"tv_skip_webpage",
+            "extractor":"youtube:player_client=tv;player_skip=webpage,configs",
+            "format":"b[height<=480]/b",
         },
         {
-            "name":"web_embedded",
-            "extractor":"youtube:player_client=web_embedded",
+            "name":"android_vr_skip_webpage",
+            "extractor":"youtube:player_client=android_vr;player_skip=webpage,configs",
             "format":"b[height<=480]/b",
         },
     ]

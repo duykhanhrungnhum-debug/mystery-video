@@ -244,8 +244,9 @@ def test_fixed_source_public_policy_does_not_block_standard_youtube_license():
 def test_source_download_has_bounded_youtube_client_fallbacks():
     source = SOURCE.read_text(encoding="utf-8")
     assert '"name":"mweb_bgutil"' in source
-    assert '"name":"web_safari_hls"' in source
-    assert '"name":"web_embedded"' in source
+    assert '"name":"tv_skip_webpage"' in source
+    assert '"name":"android_vr_skip_webpage"' in source
+    assert 'player_skip=webpage,configs' in source
     assert 'source_download_all_methods_failed' in source
     assert 'BOT2_SOURCE_DOWNLOAD_STRATEGY' in source
     assert 'for strategy in strategies:' in source
