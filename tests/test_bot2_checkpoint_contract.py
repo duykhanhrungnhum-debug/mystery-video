@@ -222,3 +222,12 @@ def test_seed_ids_go_directly_to_api_before_ytdlp_channel_discovery():
     assert "def youtube_video_id" in fallback
     assert "Seed URLs are already fixed/admin-provided" in fallback
     assert '"source_item_id": vid' in fallback
+
+
+def test_series_matching_normalizes_traditional_and_simplified_chinese():
+    edge = EDGE.read_text(encoding="utf-8")
+    assert '"誰":"谁"' in edge
+    assert '"讓":"让"' in edge
+    assert '"這":"这"' in edge
+    assert '"個":"个"' in edge
+    assert '.split("").map(ch=>tradToSimp[ch]||ch).join("")' in edge

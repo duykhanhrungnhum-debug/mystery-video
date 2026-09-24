@@ -153,9 +153,14 @@ function channelIdFromUrl(value:any):string{
   return m?String(m[1]):"";
 }
 function normalizeSeriesMatch(value:any):string{
+  const tradToSimp:Record<string,string>={
+    "誰":"谁","讓":"让","這":"这","個":"个","種":"种","際":"际","淨":"净",
+    "瀕":"濒","戶":"户","過":"过","災":"灾","無":"无","敵":"敌"
+  };
   return String(value||"")
     .normalize("NFKC")
     .toLowerCase()
+    .split("").map(ch=>tradToSimp[ch]||ch).join("")
     .replace(/[\s《》【】\[\]（）()「」『』:：·・~～_—–\-]/g,"");
 }
 async function youtubeJson(token:string,url:URL){
