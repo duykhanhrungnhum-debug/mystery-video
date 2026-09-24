@@ -66,48 +66,96 @@ try:
     time.sleep(3)
 
     source=Path("/kaggle/working/source.mp4")
-    cmd=[
-        sys.executable,"-m","yt_dlp",
-        "--no-playlist","--retries","3","--fragment-retries","3",
-        "--remote-components","ejs:npm",
-        "--js-runtimes","deno:"+deno,
-        "--extractor-args","youtube:player_client=mweb",
-        "-f","b[height<=480]/b",
-        "--merge-output-format","mp4",
-        "-o",str(source),
-        JOB["source_url"],
-    ]
-    subprocess.check_call(cmd)
-    if not source.exists() or source.stat().st_size < 1_000_000:
-        raise RuntimeError("source_missing_or_too_small")
 
-    probe=subprocess.check_output([
-        "ffprobe","-v","error","-show_entries",
-        "stream=codec_type","-of","csv=p=0",str(source)
-    ],text=True)
-    kinds={x.strip() for x in probe.splitlines() if x.strip()}
-    if "video" not in kinds or "audio" not in kinds:
-        raise RuntimeError("source_missing_audio_or_video_stream")
+    def valid_source():
+        if not source.exists() or source.stat().st_size < 1_000_000:
+            return False
+        try:
+            probe=subprocess.check_output([
+                "ffprobe","-v","error","-show_entries",
+                "stream=codec_type","-of","csv=p=0",str(source)
+            ],text=True)
+        except Exception:
+            return False
+        kinds={x.strip() for x in probe.splitlines() if x.strip()}
+        return "video" in kinds and "audio" in kinds
+
+    # YouTube access changes frequently. Keep source acquisition bounded and
+    # method-local: try the preferred PO-token path, then two no-cookie clients.
+    # Stop immediately after the first valid A/V file.
+    strategies=[
+        {
+            "name":"mweb_bgutil",
+            "extractor":"youtube:player_client=mweb",
+            "format":"b[height<=480]/b",
+        },
+        {
+            "name":"web_safari_hls",
+            "extractor":"youtube:player_client=web_safari",
+            "format":"b[height<=480][protocol*=m3u8]/b[protocol*=m3u8]/b[height<=480]/b",
+        },
+        {
+            "name":"web_embedded",
+            "extractor":"youtube:player_client=web_embedded",
+            "format":"b[height<=480]/b",
+        },
+    ]
+    errors=[]
+    selected_strategy=""
+    for strategy in strategies:
+        for stale in Path("/kaggle/working").glob("source.mp4*"):
+            try: stale.unlink()
+            except Exception: pass
+        cmd=[
+            sys.executable,"-m","yt_dlp",
+            "--no-playlist","--retries","2","--fragment-retries","2",
+            "--remote-components","ejs:npm",
+            "--js-runtimes","deno:"+deno,
+            "--extractor-args",strategy["extractor"],
+            "-f",strategy["format"],
+            "--merge-output-format","mp4",
+            "-o",str(source),
+            JOB["source_url"],
+        ]
+        p=subprocess.run(cmd,text=True,capture_output=True)
+        if p.returncode==0 and valid_source():
+            selected_strategy=strategy["name"]
+            print("BOT2_SOURCE_DOWNLOAD_STRATEGY",selected_strategy,flush=True)
+            break
+        errors.append({
+            "strategy":strategy["name"],
+            "returncode":p.returncode,
+            "stderr":(p.stderr or "")[-900:],
+        })
+        print("BOT2_SOURCE_DOWNLOAD_RETRY",strategy["name"],p.returncode,flush=True)
+    if not selected_strategy:
+        raise RuntimeError("source_download_all_methods_failed:"+json.dumps(errors,ensure_ascii=False))
 
     # Caption-first production path: acquire Chinese subtitles on CPU while the
     # source downloader and anti-bot provider are already warm. Missing captions
     # are not a failure; the AI worker will fall back to ASR only when needed.
     caption_ok=False
     try:
-        caption_cmd=[
-            sys.executable,"-m","yt_dlp",
-            "--no-playlist","--skip-download",
-            "--retries","2",
-            "--remote-components","ejs:npm",
-            "--js-runtimes","deno:"+deno,
-            "--extractor-args","youtube:player_client=mweb",
-            "--write-subs","--write-auto-subs",
-            "--sub-langs","zh-Hans,zh-CN,zh,zh-Hant,zh-TW",
-            "--sub-format","json3",
-            "-o","/kaggle/working/source-caption.%(ext)s",
-            JOB["source_url"],
-        ]
-        subprocess.run(caption_cmd,check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        for caption_client in ("mweb","web_safari"):
+            caption_cmd=[
+                sys.executable,"-m","yt_dlp",
+                "--no-playlist","--skip-download",
+                "--retries","1",
+                "--remote-components","ejs:npm",
+                "--js-runtimes","deno:"+deno,
+                "--extractor-args","youtube:player_client="+caption_client,
+                "--write-subs","--write-auto-subs",
+                "--sub-langs","zh-Hans,zh-CN,zh,zh-Hant,zh-TW",
+                "--sub-format","json3",
+                "-o","/kaggle/working/source-caption.%(ext)s",
+                JOB["source_url"],
+            ]
+            subprocess.run(caption_cmd,check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            if any(
+                p.is_file() and p.stat().st_size>200
+                for p in Path("/kaggle/working").glob("source-caption*.json3")
+            ):
+                break
         caption_files=[
             p for p in Path("/kaggle/working").glob("source-caption*.json3")
             if p.is_file() and p.stat().st_size>200
@@ -131,7 +179,7 @@ try:
     subprocess.run(["rm","-rf","/kaggle/working/bgutil","/kaggle/working/deno"],check=False)
     stage(
         "source_ready",
-        "Source verified on Kaggle CPU",
+        "Source verified on Kaggle CPU via "+selected_strategy,
         source_kernel_ref=JOB["source_kernel_ref"],
         source_bytes=source.stat().st_size,
     )
