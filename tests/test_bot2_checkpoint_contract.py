@@ -166,11 +166,11 @@ def test_source_refresh_paginates_channel_uploads_for_sequential_backfill():
 
 def test_fixed_source_channel_recovers_from_verified_seed_video():
     edge = EDGE.read_text(encoding="utf-8")
-    assert "uploadsPlaylistFor" in edge
-    assert '"channel_recovery_seed_lookup_failed:"' in edge
-    assert '.eq("rights_status","approved")' in edge
-    assert 'snippet?.channelId' in edge
-    assert '"verified_seed_video"' in edge
+    assert "resolveFixedSource" in edge
+    assert 'locator_type==="seed_video_id"' in edge
+    assert '.eq("active",true).eq("verified",true)' in edge
+    assert 'v?.snippet?.channelId' in edge
+    assert '"resolved_verified_registry"' in edge
     assert 'channel_url:canonicalUrl' in edge
 
 
