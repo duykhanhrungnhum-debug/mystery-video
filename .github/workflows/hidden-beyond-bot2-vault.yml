@@ -68,6 +68,11 @@ jobs:
               "inserted="+str(d.get("inserted_count",0)),
               "skipped="+str(len(d.get("skipped") or [])),
           )
+          print("BOT2_FIXED_SOURCE_REFRESH_DETAIL", json.dumps({
+              "inserted": d.get("inserted") or [],
+              "skipped": d.get("skipped") or [],
+              "observed": d.get("observed") or [],
+          }, ensure_ascii=False))
           PY
           else
             echo "::warning title=Bot2 fixed-source refresh failed::Continuing with the already approved queue. Exact requests will still fail closed if the requested episode is unavailable."

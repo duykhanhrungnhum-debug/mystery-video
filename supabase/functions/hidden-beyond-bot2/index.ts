@@ -180,6 +180,7 @@ async function refreshFixedSources(db:any){
   const yt=await youtubeAccess(db);
   const inserted:any[]=[];
   const skipped:any[]=[];
+  const observed:any[]=[];
 
   for(const fixed of FIXED){
     const srcQ=await db.from("sources")
@@ -260,21 +261,37 @@ async function refreshFixedSources(db:any){
         continue;
       }
 
-      const candidates=uploadMeta.filter((v:any)=>{
+      const matchingAfterBaseline=uploadMeta.filter((v:any)=>{
         const id=String(v?.id||"");
         const titleKey=normalizeSeriesMatch(v?.snippet?.title||"");
         const published=Date.parse(String(v?.snippet?.publishedAt||""));
         return (
           id && !existingSet.has(id) &&
           titleKey.includes(key) &&
-          String(v?.status?.privacyStatus||"")==="public" &&
-          String(v?.status?.license||"")==="creativeCommon" &&
           Number.isFinite(published) && published>baseline
         );
       }).sort((a:any,b:any)=>
         Date.parse(String(a?.snippet?.publishedAt||""))-
         Date.parse(String(b?.snippet?.publishedAt||""))
       );
+      observed.push({
+        source_id:fixed.source_id,
+        series_id:series.id,
+        scanned_uploads:uploadMeta.length,
+        baseline:new Date(baseline||0).toISOString(),
+        matching_after_baseline:matchingAfterBaseline.slice(0,20).map((v:any)=>({
+          source_item_id:String(v?.id||""),
+          title:String(v?.snippet?.title||""),
+          published_at:String(v?.snippet?.publishedAt||""),
+          privacy:String(v?.status?.privacyStatus||""),
+          license:String(v?.status?.license||""),
+        })),
+      });
+
+      const candidates=matchingAfterBaseline.filter((v:any)=>(
+        String(v?.status?.privacyStatus||"")==="public" &&
+        String(v?.status?.license||"")==="creativeCommon"
+      ));
 
       let episode=Math.max(
         Number(series.latest_episode_seen||0),
@@ -321,7 +338,7 @@ async function refreshFixedSources(db:any){
       if(su.error) throw new Error("latest_episode_seen_update_failed:"+su.error.message);
     }
   }
-  return {inserted_count:inserted.length,inserted,skipped};
+  return {inserted_count:inserted.length,inserted,skipped,observed};
 }
 
 async function ensurePlaylist(db:any,token:string,series:any){
