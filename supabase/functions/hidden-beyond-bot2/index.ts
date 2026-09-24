@@ -176,6 +176,151 @@ async function youtubeVideosByIds(token:string,ids:string[]):Promise<any[]>{
   }
   return out;
 }
+
+function normalizeLocatorValue(value:any):string{
+  return String(value||"").trim();
+}
+function chineseOrdinal(raw:string):number{
+  const s=String(raw||"").trim();
+  if(/^\d+$/.test(s)) return Number(s);
+  const m:Record<string,number>={一:1,二:2,两:2,兩:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10};
+  if(s==="十") return 10;
+  if(s.includes("十")){
+    const [a,b]=s.split("十",2);
+    const tens=a?Number(m[a]||0):1;
+    const ones=b?Number(m[b]||0):0;
+    return tens*10+ones;
+  }
+  return Number(m[s]||0);
+}
+function inferEpisodeNumber(title:any):number{
+  const text=String(title||"").normalize("NFKC");
+  const digit=text.match(/第\s*(\d{1,4})\s*[季集部]/i)
+    || text.match(/(?:season|ep(?:isode)?|s)\s*[-_:#]?\s*(\d{1,4})/i);
+  if(digit) return Number(digit[1]||0);
+  const zh=text.match(/第\s*([一二三四五六七八九十两兩]+)\s*[季集部]/);
+  return zh?chineseOrdinal(String(zh[1]||"")):0;
+}
+async function saveSourceHealth(db:any,sourceId:number,patch:any){
+  const now=new Date().toISOString();
+  const current=await db.from("hidden_beyond_source_health")
+    .select("failure_count,last_success_at").eq("source_id",sourceId).maybeSingle();
+  if(current.error) throw new Error("source_health_lookup_failed:"+current.error.message);
+  const isHealthy=String(patch.status||"")==="healthy";
+  const failureCount=isHealthy?0:Number(current.data?.failure_count||0)+1;
+  const row={
+    source_id:sourceId,
+    status:String(patch.status||"unknown"),
+    resolved_channel_id:patch.resolved_channel_id??null,
+    uploads_playlist_id:patch.uploads_playlist_id??null,
+    last_checked_at:now,
+    last_success_at:isHealthy?now:(current.data?.last_success_at||null),
+    failure_count:failureCount,
+    reason:clip(patch.reason||"",500)||null,
+    diagnostics:patch.diagnostics&&typeof patch.diagnostics==="object"?patch.diagnostics:{},
+    updated_at:now,
+  };
+  const u=await db.from("hidden_beyond_source_health")
+    .upsert(row,{onConflict:"source_id"});
+  if(u.error) throw new Error("source_health_save_failed:"+u.error.message);
+}
+async function upsertVerifiedLocator(
+  db:any,sourceId:number,locatorType:string,locatorValue:string,provenance:string
+){
+  const value=normalizeLocatorValue(locatorValue);
+  if(!value) return;
+  const now=new Date().toISOString();
+  const u=await db.from("hidden_beyond_source_locators").upsert({
+    source_id:sourceId,locator_type:locatorType,locator_value:value,
+    verified:true,provenance,verified_at:now,last_success_at:now,
+    failure_count:0,active:true,updated_at:now,
+  },{onConflict:"source_id,locator_type,locator_value"});
+  if(u.error) throw new Error("source_locator_save_failed:"+u.error.message);
+}
+async function channelInfo(token:string,channelId:string){
+  const id=normalizeLocatorValue(channelId);
+  if(!id) return null;
+  const url=new URL("https://www.googleapis.com/youtube/v3/channels");
+  url.searchParams.set("part","snippet,contentDetails");
+  url.searchParams.set("id",id);
+  const b=await youtubeJson(token,url);
+  const item=Array.isArray(b?.items)?b.items[0]:null;
+  if(!item) return null;
+  return {
+    channel_id:String(item?.id||id),
+    channel_title:String(item?.snippet?.title||""),
+    uploads_playlist_id:String(item?.contentDetails?.relatedPlaylists?.uploads||""),
+  };
+}
+async function playlistChannelId(token:string,playlistId:string):Promise<string>{
+  const id=normalizeLocatorValue(playlistId);
+  if(!id) return "";
+  const url=new URL("https://www.googleapis.com/youtube/v3/playlists");
+  url.searchParams.set("part","snippet");
+  url.searchParams.set("id",id);
+  const b=await youtubeJson(token,url);
+  return String(b?.items?.[0]?.snippet?.channelId||"");
+}
+async function resolveFixedSource(db:any,token:string,fixed:any,src:any){
+  const lq=await db.from("hidden_beyond_source_locators")
+    .select("locator_type,locator_value,provenance,verified,active")
+    .eq("source_id",fixed.source_id).eq("active",true).eq("verified",true);
+  if(lq.error) throw new Error("source_locator_lookup_failed:"+lq.error.message);
+  const locators=lq.data||[];
+  const channelCandidates:string[]=[];
+  const addChannel=(v:any)=>{
+    const id=normalizeLocatorValue(v);
+    if(id&&!channelCandidates.includes(id)) channelCandidates.push(id);
+  };
+  for(const l of locators) if(l.locator_type==="channel_id") addChannel(l.locator_value);
+  addChannel(channelIdFromUrl(src.channel_url));
+
+  const playlistLocators=locators
+    .filter((l:any)=>l.locator_type==="uploads_playlist_id")
+    .map((l:any)=>normalizeLocatorValue(l.locator_value)).filter(Boolean);
+  for(const playlistId of playlistLocators){
+    try{
+      addChannel(await playlistChannelId(token,playlistId));
+    }catch{}
+  }
+
+  const seedIds=locators
+    .filter((l:any)=>l.locator_type==="seed_video_id")
+    .map((l:any)=>normalizeLocatorValue(l.locator_value)).filter(Boolean);
+  if(seedIds.length){
+    try{
+      const seedMeta=await youtubeVideosByIds(token,seedIds);
+      for(const v of seedMeta) addChannel(v?.snippet?.channelId);
+    }catch{}
+  }
+
+  const attempts:any[]=[];
+  for(const candidate of channelCandidates){
+    try{
+      const info=await channelInfo(token,candidate);
+      attempts.push({channel_id:candidate,found:Boolean(info),uploads:Boolean(info?.uploads_playlist_id)});
+      if(!info?.uploads_playlist_id) continue;
+      const canonicalUrl="https://www.youtube.com/channel/"+info.channel_id;
+      const su=await db.from("sources").update({channel_url:canonicalUrl}).eq("id",fixed.source_id);
+      if(su.error) throw new Error("source_canonical_channel_save_failed:"+su.error.message);
+      await upsertVerifiedLocator(db,fixed.source_id,"channel_id",info.channel_id,"resolved_verified_registry");
+      await upsertVerifiedLocator(db,fixed.source_id,"uploads_playlist_id",info.uploads_playlist_id,"resolved_verified_registry");
+      await saveSourceHealth(db,fixed.source_id,{
+        status:"healthy",resolved_channel_id:info.channel_id,
+        uploads_playlist_id:info.uploads_playlist_id,reason:"verified_locator_resolved",
+        diagnostics:{attempts,seed_count:seedIds.length,channel_title:info.channel_title},
+      });
+      return {ok:true,...info};
+    }catch(err){
+      attempts.push({channel_id:candidate,error:clip(err instanceof Error?err.message:String(err),300)});
+    }
+  }
+  await saveSourceHealth(db,fixed.source_id,{
+    status:"unavailable",reason:"no_verified_locator_resolved",
+    diagnostics:{attempts,seed_count:seedIds.length,locator_count:locators.length},
+  });
+  return {ok:false,reason:"no_verified_locator_resolved",attempts};
+}
 async function refreshFixedSources(db:any){
   const yt=await youtubeAccess(db);
   const inserted:any[]=[];
@@ -183,205 +328,168 @@ async function refreshFixedSources(db:any){
   const observed:any[]=[];
 
   for(const fixed of FIXED){
-    const srcQ=await db.from("sources")
-      .select("id,name,channel_url,active,auto_eligible,approval_status")
-      .eq("id",fixed.source_id).single();
-    if(srcQ.error) throw new Error("fixed_source_lookup_failed:"+srcQ.error.message);
-    const src=srcQ.data;
-    if(!src.active||!src.auto_eligible||src.approval_status!=="approved"){
-      skipped.push({source_id:fixed.source_id,reason:"source_not_auto_approved"});
-      continue;
-    }
-    const channelId=channelIdFromUrl(src.channel_url);
-    if(!channelId){
-      skipped.push({source_id:fixed.source_id,reason:"channel_id_missing"});
-      continue;
-    }
+    try{
+      const srcQ=await db.from("sources")
+        .select("id,name,channel_url,active,auto_eligible,approval_status")
+        .eq("id",fixed.source_id).single();
+      if(srcQ.error) throw new Error("fixed_source_lookup_failed:"+srcQ.error.message);
+      const src=srcQ.data;
+      if(!src.active||!src.auto_eligible||src.approval_status!=="approved"){
+        await saveSourceHealth(db,fixed.source_id,{
+          status:"unavailable",reason:"source_not_auto_approved",diagnostics:{}
+        });
+        skipped.push({source_id:fixed.source_id,reason:"source_not_auto_approved"});
+        continue;
+      }
 
-    async function uploadsPlaylistFor(candidateChannelId:string):Promise<string>{
-      const chUrl=new URL("https://www.googleapis.com/youtube/v3/channels");
-      chUrl.searchParams.set("part","contentDetails");
-      chUrl.searchParams.set("id",candidateChannelId);
-      const ch=await youtubeJson(yt.token,chUrl);
-      return String(ch?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads||"");
-    }
+      const resolved=await resolveFixedSource(db,yt.token,fixed,src);
+      if(!resolved.ok){
+        skipped.push({source_id:fixed.source_id,reason:"source_unavailable"});
+        continue;
+      }
+      const uploads=String(resolved.uploads_playlist_id||"");
 
-    let resolvedChannelId=channelId;
-    let uploads=await uploadsPlaylistFor(resolvedChannelId);
-    if(!uploads){
-      // Recover the canonical channel from an already VERIFIED source item.
-      // YouTube video IDs do not move between channels, so the live snippet
-      // channelId is a safer anchor than a stale stored channel URL.
-      const seedQ=await db.from("source_items")
-        .select("source_item_id")
-        .eq("source_id",fixed.source_id)
-        .eq("series_id",fixed.series_id)
-        .eq("rights_status","approved")
-        .order("episode_number",{ascending:true})
-        .limit(3);
-      if(seedQ.error) throw new Error("channel_recovery_seed_lookup_failed:"+seedQ.error.message);
-      const seedIds=(seedQ.data||[]).map((x:any)=>String(x.source_item_id||"")).filter(Boolean);
-      const seedMeta=await youtubeVideosByIds(yt.token,seedIds);
-      const recoveredChannelId=String(seedMeta?.[0]?.snippet?.channelId||"");
-      if(recoveredChannelId && recoveredChannelId!==resolvedChannelId){
-        const recoveredUploads=await uploadsPlaylistFor(recoveredChannelId);
-        if(recoveredUploads){
-          resolvedChannelId=recoveredChannelId;
-          uploads=recoveredUploads;
-          const canonicalUrl="https://www.youtube.com/channel/"+recoveredChannelId;
-          const su=await db.from("sources").update({
-            channel_url:canonicalUrl,
-          }).eq("id",fixed.source_id);
-          if(su.error) throw new Error("channel_recovery_save_failed:"+su.error.message);
-          observed.push({
-            source_id:fixed.source_id,
-            series_id:fixed.series_id,
-            recovered_channel_id:recoveredChannelId,
-            recovery:"verified_seed_video",
+      const uploadIds:string[]=[];
+      let pageToken="";
+      const maxUploadPages=10;
+      for(let page=0;page<maxUploadPages;page++){
+        const plUrl=new URL("https://www.googleapis.com/youtube/v3/playlistItems");
+        plUrl.searchParams.set("part","snippet,contentDetails");
+        plUrl.searchParams.set("playlistId",uploads);
+        plUrl.searchParams.set("maxResults","50");
+        if(pageToken) plUrl.searchParams.set("pageToken",pageToken);
+        const pl=await youtubeJson(yt.token,plUrl);
+        const ids=(pl?.items||[])
+          .map((x:any)=>String(x?.contentDetails?.videoId||x?.snippet?.resourceId?.videoId||""))
+          .filter(Boolean);
+        uploadIds.push(...ids);
+        pageToken=String(pl?.nextPageToken||"");
+        if(!pageToken) break;
+      }
+      const uploadMeta=await youtubeVideosByIds(yt.token,uploadIds);
+
+      const seriesQ=await db.from("source_series")
+        .select("id,source_id,series_title,latest_episode_seen,last_ingested_episode,active,state")
+        .eq("source_id",fixed.source_id).eq("active",true)
+        .order("series_order",{ascending:true});
+      if(seriesQ.error) throw new Error("fixed_series_lookup_failed:"+seriesQ.error.message);
+
+      for(const series of seriesQ.data||[]){
+        const itemsQ=await db.from("source_items")
+          .select("source_item_id,episode_number,source_published_at,checked_at")
+          .eq("source_id",fixed.source_id).eq("series_id",series.id)
+          .order("episode_number",{ascending:true});
+        if(itemsQ.error) throw new Error("fixed_items_lookup_failed:"+itemsQ.error.message);
+        const existing=itemsQ.data||[];
+        const existingIds=existing.map((x:any)=>String(x.source_item_id||"")).filter(Boolean);
+        const existingSet=new Set(existingIds);
+        const existingEpisodes=new Set(
+          existing.map((x:any)=>Number(x.episode_number||0)).filter((n:number)=>n>0)
+        );
+        const key=normalizeSeriesMatch(series.series_title);
+        if(key.length<4){
+          skipped.push({source_id:fixed.source_id,series_id:series.id,reason:"series_match_key_too_short"});
+          continue;
+        }
+
+        const matching=uploadMeta.filter((v:any)=>{
+          const id=String(v?.id||"");
+          const titleKey=normalizeSeriesMatch(v?.snippet?.title||"");
+          return (
+            id && !existingSet.has(id) &&
+            titleKey.includes(key) &&
+            String(v?.status?.privacyStatus||"")==="public" &&
+            String(v?.status?.license||"")==="creativeCommon"
+          );
+        }).sort((a:any,b:any)=>
+          Date.parse(String(a?.snippet?.publishedAt||""))-
+          Date.parse(String(b?.snippet?.publishedAt||""))
+        );
+
+        const durableTimes=existing
+          .map((x:any)=>Date.parse(String(x.source_published_at||"")))
+          .filter((x:number)=>Number.isFinite(x));
+        const baseline=durableTimes.length?Math.max(...durableTimes):0;
+        let cursor=Math.max(
+          Number(series.latest_episode_seen||0),
+          Number(series.last_ingested_episode||0),
+          0,...Array.from(existingEpisodes)
+        );
+        const queuedEpisodes=new Set<number>();
+
+        for(const v of matching){
+          const id=String(v.id);
+          const title=String(v?.snippet?.title||id);
+          const published=Date.parse(String(v?.snippet?.publishedAt||""));
+          const explicitEpisode=inferEpisodeNumber(title);
+          let episode=0;
+          let discoveryMethod="";
+          if(explicitEpisode>0){
+            if(existingEpisodes.has(explicitEpisode)||queuedEpisodes.has(explicitEpisode)) continue;
+            episode=explicitEpisode;
+            discoveryMethod="title_explicit_episode";
+          }else if(baseline>0 && Number.isFinite(published) && published>baseline){
+            cursor+=1;
+            while(existingEpisodes.has(cursor)||queuedEpisodes.has(cursor)) cursor+=1;
+            episode=cursor;
+            discoveryMethod="chronological_after_durable_baseline";
+          }else{
+            observed.push({
+              source_id:fixed.source_id,series_id:series.id,source_item_id:id,title,
+              reason:"ambiguous_episode_without_durable_baseline"
+            });
+            continue;
+          }
+          if(episode<=Number(series.last_ingested_episode||0)) continue;
+          queuedEpisodes.add(episode);
+          cursor=Math.max(cursor,episode);
+          const now=new Date().toISOString();
+          const row={
+            source_id:fixed.source_id,series_id:series.id,source_item_id:id,
+            source_url:"https://www.youtube.com/watch?v="+id,title,
+            series_title:String(series.series_title||""),episode_number:episode,
+            license_type:"creativeCommon",rights_status:"approved",
+            rights_basis:"YouTube Data API reports Creative Commons for this selected source item.",
+            evidence_url:"https://www.youtube.com/watch?v="+id,
+            attribution_text:String(src.name||""),active:true,checked_at:now,
+            source_channel_id:String(v?.snippet?.channelId||resolved.channel_id||""),
+            source_published_at:Number.isFinite(published)?new Date(published).toISOString():null,
+            discovery_method:discoveryMethod,
+          };
+          const up=await db.from("source_items").upsert(row,{onConflict:"source_id,source_item_id"});
+          if(up.error) throw new Error("fixed_item_upsert_failed:"+up.error.message);
+          inserted.push({
+            source_id:fixed.source_id,series_id:series.id,
+            episode_number:episode,source_item_id:id,title,discovery_method:discoveryMethod
           });
         }
-      }
-    }
-    if(!uploads){
-      skipped.push({
-        source_id:fixed.source_id,
-        reason:"uploads_playlist_missing",
-        stored_channel_id:channelId,
-      });
-      continue;
-    }
 
-    // Backfill must not depend on only the 50 newest channel uploads.
-    // Scan bounded playlist pages so an approved sequential episode can still be
-    // discovered after the channel has published many unrelated videos.
-    const uploadIds:string[]=[];
-    let pageToken="";
-    const maxUploadPages=10;
-    for(let page=0;page<maxUploadPages;page++){
-      const plUrl=new URL("https://www.googleapis.com/youtube/v3/playlistItems");
-      plUrl.searchParams.set("part","snippet,contentDetails");
-      plUrl.searchParams.set("playlistId",uploads);
-      plUrl.searchParams.set("maxResults","50");
-      if(pageToken) plUrl.searchParams.set("pageToken",pageToken);
-      const pl=await youtubeJson(yt.token,plUrl);
-      const ids=(pl?.items||[])
-        .map((x:any)=>String(x?.contentDetails?.videoId||x?.snippet?.resourceId?.videoId||""))
-        .filter(Boolean);
-      uploadIds.push(...ids);
-      pageToken=String(pl?.nextPageToken||"");
-      if(!pageToken) break;
-    }
-    const uploadMeta=await youtubeVideosByIds(yt.token,uploadIds);
+        const latest=Math.max(Number(series.latest_episode_seen||0),cursor);
+        const su=await db.from("source_series").update({
+          latest_episode_seen:latest,updated_at:new Date().toISOString()
+        }).eq("id",series.id);
+        if(su.error) throw new Error("latest_episode_seen_update_failed:"+su.error.message);
 
-    const seriesQ=await db.from("source_series")
-      .select("id,source_id,series_title,latest_episode_seen,last_ingested_episode,active,state")
-      .eq("source_id",fixed.source_id).eq("active",true)
-      .order("series_order",{ascending:true});
-    if(seriesQ.error) throw new Error("fixed_series_lookup_failed:"+seriesQ.error.message);
-
-    for(const series of seriesQ.data||[]){
-      const itemsQ=await db.from("source_items")
-        .select("source_item_id,episode_number")
-        .eq("source_id",fixed.source_id).eq("series_id",series.id)
-        .order("episode_number",{ascending:true});
-      if(itemsQ.error) throw new Error("fixed_items_lookup_failed:"+itemsQ.error.message);
-      const existing=itemsQ.data||[];
-      const existingIds=existing.map((x:any)=>String(x.source_item_id||"")).filter(Boolean);
-      const existingSet=new Set(existingIds);
-
-      const baselineMeta=await youtubeVideosByIds(yt.token,existingIds);
-      const publishedTimes=baselineMeta
-        .map((x:any)=>Date.parse(String(x?.snippet?.publishedAt||"")))
-        .filter((x:number)=>Number.isFinite(x));
-      if(existingIds.length>0 && publishedTimes.length<1){
-        skipped.push({source_id:fixed.source_id,series_id:series.id,reason:"baseline_publish_time_missing"});
-        continue;
-      }
-      const baseline=publishedTimes.length?Math.max(...publishedTimes):0;
-      const key=normalizeSeriesMatch(series.series_title);
-      if(key.length<4){
-        skipped.push({source_id:fixed.source_id,series_id:series.id,reason:"series_match_key_too_short"});
-        continue;
-      }
-
-      const matchingAfterBaseline=uploadMeta.filter((v:any)=>{
-        const id=String(v?.id||"");
-        const titleKey=normalizeSeriesMatch(v?.snippet?.title||"");
-        const published=Date.parse(String(v?.snippet?.publishedAt||""));
-        return (
-          id && !existingSet.has(id) &&
-          titleKey.includes(key) &&
-          Number.isFinite(published) && published>baseline
-        );
-      }).sort((a:any,b:any)=>
-        Date.parse(String(a?.snippet?.publishedAt||""))-
-        Date.parse(String(b?.snippet?.publishedAt||""))
-      );
-      observed.push({
-        source_id:fixed.source_id,
-        series_id:series.id,
-        scanned_uploads:uploadMeta.length,
-        baseline:new Date(baseline||0).toISOString(),
-        matching_after_baseline:matchingAfterBaseline.slice(0,20).map((v:any)=>({
-          source_item_id:String(v?.id||""),
-          title:String(v?.snippet?.title||""),
-          published_at:String(v?.snippet?.publishedAt||""),
-          privacy:String(v?.status?.privacyStatus||""),
-          license:String(v?.status?.license||""),
-        })),
-      });
-
-      const candidates=matchingAfterBaseline.filter((v:any)=>(
-        String(v?.status?.privacyStatus||"")==="public" &&
-        String(v?.status?.license||"")==="creativeCommon"
-      ));
-
-      let episode=Math.max(
-        Number(series.latest_episode_seen||0),
-        ...existing.map((x:any)=>Number(x.episode_number||0)),
-      );
-      for(const v of candidates){
-        episode+=1;
-        const id=String(v.id);
-        const title=String(v?.snippet?.title||id);
-        const now=new Date().toISOString();
-        const row={
-          source_id:fixed.source_id,
-          series_id:series.id,
-          source_item_id:id,
-          source_url:"https://www.youtube.com/watch?v="+id,
-          title,
-          series_title:String(series.series_title||""),
-          episode_number:episode,
-          license_type:"creativeCommon",
-          rights_status:"approved",
-          rights_basis:"YouTube Data API reports Creative Commons for this selected source item.",
-          evidence_url:"https://www.youtube.com/watch?v="+id,
-          attribution_text:String(src.name||""),
-          active:true,
-          checked_at:now,
-        };
-        const up=await db.from("source_items").upsert(
-          row,{onConflict:"source_id,source_item_id"}
-        );
-        if(up.error) throw new Error("fixed_item_upsert_failed:"+up.error.message);
-        inserted.push({
-          source_id:fixed.source_id,series_id:series.id,
-          episode_number:episode,source_item_id:id,title
+        observed.push({
+          source_id:fixed.source_id,series_id:series.id,scanned_uploads:uploadMeta.length,
+          eligible_matches:matching.length,queued:queuedEpisodes.size,
+          resolved_channel_id:resolved.channel_id,uploads_playlist_id:uploads
         });
       }
-      const latest=Math.max(
-        Number(series.latest_episode_seen||0),
-        episode
-      );
-      const su=await db.from("source_series").update({
-        latest_episode_seen:latest,
-        updated_at:new Date().toISOString()
-      }).eq("id",series.id);
-      if(su.error) throw new Error("latest_episode_seen_update_failed:"+su.error.message);
+    }catch(err){
+      const message=clip(err instanceof Error?err.message:String(err),800);
+      await saveSourceHealth(db,fixed.source_id,{
+        status:"degraded",reason:"source_refresh_failed",diagnostics:{error:message}
+      }).catch(()=>{});
+      skipped.push({source_id:fixed.source_id,reason:"source_refresh_failed",error:message});
+      continue;
     }
   }
-  return {inserted_count:inserted.length,inserted,skipped,observed};
+  const healthQ=await db.from("hidden_beyond_source_health")
+    .select("source_id,status,resolved_channel_id,uploads_playlist_id,last_checked_at,last_success_at,failure_count,reason")
+    .in("source_id",FIXED.map(x=>x.source_id)).order("source_id",{ascending:true});
+  if(healthQ.error) throw new Error("source_health_snapshot_failed:"+healthQ.error.message);
+  return {inserted_count:inserted.length,inserted,skipped,observed,health:healthQ.data||[]};
 }
 
 async function ensurePlaylist(db:any,token:string,series:any){
@@ -491,6 +599,17 @@ async function peekExact(db:any,rotation:number,episode:number){
     .eq("episode_number",episode).maybeSingle();
   if(iq.error) throw new Error("source_item_lookup_failed:"+iq.error.message);
   if(!iq.data){
+    const hq=await db.from("hidden_beyond_source_health")
+      .select("status,reason,last_checked_at,failure_count")
+      .eq("source_id",fixed.source_id).maybeSingle();
+    if(hq.error) throw new Error("source_health_lookup_failed:"+hq.error.message);
+    if(hq.data && ["unavailable","degraded"].includes(String(hq.data.status||""))){
+      return {
+        stage:"target_unavailable",reason:String(hq.data.reason||"source_unavailable"),
+        rotation,episode,series_id:fixed.series_id,source_id:fixed.source_id,
+        source_health:hq.data,last_ingested_episode:Number(sq.data.last_ingested_episode||0)
+      };
+    }
     return {
       stage:"target_missing",reason:"approved_source_item_not_found",
       rotation,episode,series_id:fixed.series_id,source_id:fixed.source_id,
@@ -603,7 +722,7 @@ async function selectNext(db:any,state:any,request:any={}){
   const next=selectionMode==="exact"
     ? await peekExact(db,targetRotation,targetEpisode)
     : await peekNext(db,state);
-  if(["target_invalid","target_missing","already_completed","target_conflict"].includes(String(next.stage))){
+  if(["target_invalid","target_missing","target_unavailable","already_completed","target_conflict"].includes(String(next.stage))){
     return next;
   }
   if(next.stage!=="ready"){

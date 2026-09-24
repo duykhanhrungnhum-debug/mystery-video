@@ -172,3 +172,33 @@ def test_fixed_source_channel_recovers_from_verified_seed_video():
     assert 'snippet?.channelId' in edge
     assert '"verified_seed_video"' in edge
     assert 'channel_url:canonicalUrl' in edge
+
+
+def test_source_registry_is_verified_only_and_health_isolated():
+    edge = EDGE.read_text(encoding="utf-8")
+    assert 'hidden_beyond_source_locators' in edge
+    assert '.eq("active",true).eq("verified",true)' in edge
+    assert 'hidden_beyond_source_health' in edge
+    assert '"source_refresh_failed"' in edge
+    assert 'status:"degraded"' in edge
+    assert 'status:"unavailable"' in edge
+    assert 'status:"healthy"' in edge
+    assert "youtube/v3/search" not in edge
+
+
+def test_source_discovery_survives_missing_old_episode_metadata():
+    edge = EDGE.read_text(encoding="utf-8")
+    assert 'inferEpisodeNumber(title)' in edge
+    assert 'title_explicit_episode' in edge
+    assert 'source_published_at' in edge
+    assert 'chronological_after_durable_baseline' in edge
+    assert 'ambiguous_episode_without_durable_baseline' in edge
+    assert 'baseline_publish_time_missing' not in edge
+
+
+def test_exact_unavailable_source_stops_before_gpu():
+    edge = EDGE.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert '"target_unavailable"' in edge
+    assert 'Bot2 source unavailable' in workflow
+    assert 'exit 5' in workflow

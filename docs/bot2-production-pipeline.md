@@ -57,6 +57,40 @@ the uploads playlists of the five fixed channel IDs, matches videos to the
 already tracked series, and only queues items whose current YouTube metadata is
 Public and Creative Commons.
 
+
+
+## Fixed-source resilience contract
+
+The five approved sources are no longer represented by one fragile channel URL.
+Each source has a **verified locator registry** and an independent health record.
+
+Allowed locator types:
+- canonical YouTube channel ID;
+- uploads-playlist ID;
+- seed video ID that was explicitly verified as belonging to the approved source.
+
+The runtime never performs broad channel/source search. It may only resolve a
+source through verified locators already present in the registry. A successful
+resolution refreshes the canonical channel ID and uploads playlist and marks the
+source healthy.
+
+Source failures are isolated:
+- one unavailable/degraded source does not abort refresh of the other four;
+- scheduled rotation skips a source that has no ready approved episode and
+  continues to the next fixed source;
+- exact/manual targeting reports `target_unavailable` and stops before source
+  download or GPU, rather than returning a misleading successful production run.
+
+Episode discovery is durable:
+- new rows persist source channel ID and publication timestamp;
+- explicit season/episode markers such as `第2季`, `第2集`, `Season 2` are
+  used directly when present;
+- chronological inference is allowed only when a durable publication baseline
+  exists;
+- a deleted/private old episode therefore does not erase the information needed
+  to continue the series;
+- ambiguous candidates are recorded but never guessed into the queue.
+
 ## Resume rules
 
 1. Verified source exists: reuse it; never download the same episode again.
