@@ -252,6 +252,42 @@ async function channelInfo(token:string,channelId:string){
     uploads_playlist_id:String(item?.contentDetails?.relatedPlaylists?.uploads||""),
   };
 }
+
+async function channelInfoByIdentity(token:string,kind:string,value:string){
+  const v=normalizeLocatorValue(value);
+  if(!v) return null;
+  const url=new URL("https://www.googleapis.com/youtube/v3/channels");
+  url.searchParams.set("part","snippet,contentDetails");
+  if(kind==="handle") url.searchParams.set("forHandle",v.startsWith("@")?v:"@"+v);
+  else if(kind==="username") url.searchParams.set("forUsername",v);
+  else return null;
+  const b=await youtubeJson(token,url);
+  const item=Array.isArray(b?.items)?b.items[0]:null;
+  if(!item) return null;
+  return {
+    channel_id:String(item?.id||""),
+    channel_title:String(item?.snippet?.title||""),
+    uploads_playlist_id:String(item?.contentDetails?.relatedPlaylists?.uploads||""),
+  };
+}
+async function channelFromVerifiedSeedOembed(token:string,seedVideoId:string){
+  const id=normalizeLocatorValue(seedVideoId);
+  if(!id) return null;
+  const u=new URL("https://www.youtube.com/oembed");
+  u.searchParams.set("url","https://www.youtube.com/watch?v="+id);
+  u.searchParams.set("format","json");
+  const r=await fetch(u,{headers:{"user-agent":"Mozilla/5.0 HiddenBeyondBot2/1.0"}});
+  if(!r.ok) return null;
+  const body=await r.json().catch(()=>({}));
+  const authorUrl=String(body?.author_url||"");
+  const channelMatch=authorUrl.match(/\/channel\/([^/?#]+)/);
+  if(channelMatch) return await channelInfo(token,String(channelMatch[1]||""));
+  const handleMatch=authorUrl.match(/\/@([^/?#]+)/);
+  if(handleMatch) return await channelInfoByIdentity(token,"handle",String(handleMatch[1]||""));
+  const userMatch=authorUrl.match(/\/user\/([^/?#]+)/);
+  if(userMatch) return await channelInfoByIdentity(token,"username",String(userMatch[1]||""));
+  return null;
+}
 async function playlistChannelId(token:string,playlistId:string):Promise<string>{
   const id=normalizeLocatorValue(playlistId);
   if(!id) return "";
@@ -287,11 +323,26 @@ async function resolveFixedSource(db:any,token:string,fixed:any,src:any){
   const seedIds=locators
     .filter((l:any)=>l.locator_type==="seed_video_id")
     .map((l:any)=>normalizeLocatorValue(l.locator_value)).filter(Boolean);
+  const seedResolution:any[]=[];
   if(seedIds.length){
     try{
       const seedMeta=await youtubeVideosByIds(token,seedIds);
-      for(const v of seedMeta) addChannel(v?.snippet?.channelId);
+      for(const v of seedMeta){
+        addChannel(v?.snippet?.channelId);
+        seedResolution.push({seed_video_id:String(v?.id||""),method:"videos_list",channel_id:String(v?.snippet?.channelId||"")});
+      }
     }catch{}
+    for(const seedId of seedIds){
+      try{
+        const info=await channelFromVerifiedSeedOembed(token,seedId);
+        if(info?.channel_id){
+          addChannel(info.channel_id);
+          seedResolution.push({seed_video_id:seedId,method:"oembed_author",channel_id:info.channel_id});
+        }
+      }catch(err){
+        seedResolution.push({seed_video_id:seedId,method:"oembed_author",error:clip(err instanceof Error?err.message:String(err),200)});
+      }
+    }
   }
 
   const attempts:any[]=[];
@@ -308,7 +359,7 @@ async function resolveFixedSource(db:any,token:string,fixed:any,src:any){
       await saveSourceHealth(db,fixed.source_id,{
         status:"healthy",resolved_channel_id:info.channel_id,
         uploads_playlist_id:info.uploads_playlist_id,reason:"verified_locator_resolved",
-        diagnostics:{attempts,seed_count:seedIds.length,channel_title:info.channel_title},
+        diagnostics:{attempts,seed_count:seedIds.length,seed_resolution:seedResolution,channel_title:info.channel_title},
       });
       return {ok:true,...info};
     }catch(err){
@@ -317,7 +368,7 @@ async function resolveFixedSource(db:any,token:string,fixed:any,src:any){
   }
   await saveSourceHealth(db,fixed.source_id,{
     status:"unavailable",reason:"no_verified_locator_resolved",
-    diagnostics:{attempts,seed_count:seedIds.length,locator_count:locators.length},
+    diagnostics:{attempts,seed_count:seedIds.length,seed_resolution:seedResolution,locator_count:locators.length},
   });
   return {ok:false,reason:"no_verified_locator_resolved",attempts};
 }

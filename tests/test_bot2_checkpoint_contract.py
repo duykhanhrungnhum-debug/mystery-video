@@ -202,3 +202,13 @@ def test_exact_unavailable_source_stops_before_gpu():
     assert '"target_unavailable"' in edge
     assert 'Bot2 source unavailable' in workflow
     assert 'exit 5' in workflow
+
+
+def test_verified_seed_has_oembed_handle_fallback_without_broad_search():
+    edge = EDGE.read_text(encoding="utf-8")
+    assert "channelFromVerifiedSeedOembed" in edge
+    assert '"https://www.youtube.com/oembed"' in edge
+    assert '"forHandle"' in edge
+    assert '"forUsername"' in edge
+    assert 'method:"oembed_author"' in edge
+    assert "youtube/v3/search" not in edge
