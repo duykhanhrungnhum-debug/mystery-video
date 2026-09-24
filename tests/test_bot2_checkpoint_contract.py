@@ -153,6 +153,7 @@ def test_source_refresh_never_searches_for_new_channels():
     assert "search.list" not in edge
     assert "youtube/v3/search" not in edge
     assert 'channelIdFromUrl(src.channel_url)' in edge
+    assert '/ingest-fixed-fallback' in edge
 
 
 def test_source_refresh_paginates_channel_uploads_for_sequential_backfill():
@@ -164,26 +165,6 @@ def test_source_refresh_paginates_channel_uploads_for_sequential_backfill():
     assert 'uploadIds.push(...ids)' in edge
 
 
-def test_fixed_source_channel_recovers_from_verified_seed_video():
-    edge = EDGE.read_text(encoding="utf-8")
-    assert "resolveFixedSource" in edge
-    assert 'locator_type==="seed_video_id"' in edge
-    assert '.eq("active",true).eq("verified",true)' in edge
-    assert 'v?.snippet?.channelId' in edge
-    assert '"resolved_verified_registry"' in edge
-    assert 'channel_url:canonicalUrl' in edge
-
-
-def test_source_registry_is_verified_only_and_health_isolated():
-    edge = EDGE.read_text(encoding="utf-8")
-    assert 'hidden_beyond_source_locators' in edge
-    assert '.eq("active",true).eq("verified",true)' in edge
-    assert 'hidden_beyond_source_health' in edge
-    assert '"source_refresh_failed"' in edge
-    assert 'status:"degraded"' in edge
-    assert 'status:"unavailable"' in edge
-    assert 'status:"healthy"' in edge
-    assert "youtube/v3/search" not in edge
 
 
 def test_source_discovery_survives_missing_old_episode_metadata():
@@ -196,13 +177,6 @@ def test_source_discovery_survives_missing_old_episode_metadata():
     assert 'baseline_publish_time_missing' not in edge
 
 
-def test_exact_unavailable_source_stops_before_gpu():
-    edge = EDGE.read_text(encoding="utf-8")
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert '"target_unavailable"' in edge
-    assert 'Bot2 source unavailable' in workflow
-    assert 'exit 5' in workflow
-
 
 def test_verified_seed_has_oembed_handle_fallback_without_broad_search():
     edge = EDGE.read_text(encoding="utf-8")
@@ -212,3 +186,33 @@ def test_verified_seed_has_oembed_handle_fallback_without_broad_search():
     assert '"forUsername"' in edge
     assert 'method:"oembed_author"' in edge
     assert "youtube/v3/search" not in edge
+
+
+FALLBACK = Path("scripts/bot2_refresh_fixed_sources_fallback.py")
+
+
+def test_fixed_sources_are_trusted_and_api_failure_uses_ytdlp_fallback():
+    edge = EDGE.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    fallback = FALLBACK.read_text(encoding="utf-8")
+    assert '"youtube_api_channel_unavailable"' in edge
+    assert '"fallback_required":true' in edge
+    assert '/ingest-fixed-fallback' in edge
+    assert 'bot2_refresh_fixed_sources_fallback.py' in workflow
+    assert '"yt_dlp"' in fallback
+    assert '"seed_video_urls"' not in edge
+    assert "youtube/v3/search" not in edge
+    assert "ytsearch" not in fallback
+
+
+def test_exact_missing_is_visible_failure_after_fallback():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    edge = EDGE.read_text(encoding="utf-8")
+    assert '"target_unavailable"' not in edge
+    assert 'exact episode not found after API+yt-dlp fallback' in workflow
+    assert 'if [ "$STAGE" = "target_missing" ]; then' in workflow
+    assert 'exit 5' in workflow
+
+
+def test_fallback_submitter_compiles():
+    compile(FALLBACK.read_text(encoding="utf-8"), str(FALLBACK), "exec")

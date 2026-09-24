@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python -m pip install --quiet -e .
+          python -m pip install --quiet -e . "yt-dlp[default]>=2026.1"
 
       - name: Preflight configuration
         shell: bash
@@ -82,12 +82,48 @@ jobs:
             --event "$GITHUB_EVENT_NAME" \
             --trigger .github/bot2.trigger \
             --output bot2-next-request.json
+          FALLBACK_IDS="$(python - <<'PY'
+          import json
+          d=json.load(open("bot2-source-refresh.json",encoding="utf-8")) if __import__("os").path.exists("bot2-source-refresh.json") else {}
+          ids=[str(x.get("source_id")) for x in (d.get("skipped") or []) if x.get("fallback_required") and x.get("source_id")]
+          print(",".join(ids))
+          PY
+          )"
+          if [ -n "$FALLBACK_IDS" ]; then
+            python scripts/bot2_refresh_fixed_sources_fallback.py \
+              --config config/hidden_beyond_fixed_sources.json \
+              --source-ids "$FALLBACK_IDS" \
+              --output bot2-fallback-candidates.json || true
+            python - <<'PY'
+          import json, os, subprocess
+          p="bot2-fallback-candidates.json"
+          if not os.path.exists(p):
+              raise SystemExit(0)
+          data=json.load(open(p,encoding="utf-8"))
+          for group in data.get("sources",[]):
+              if not group.get("candidates"):
+                  continue
+              out=f"fallback-{group['source_id']}.json"
+              json.dump({
+                  "source_id":group["source_id"],
+                  "series_id":group["series_id"],
+                  "candidates":group["candidates"],
+              },open(out,"w",encoding="utf-8"),ensure_ascii=False)
+          PY
+            for payload in fallback-*.json; do
+              [ -e "$payload" ] || continue
+              curl --fail-with-body --retry 2 --retry-all-errors -sS -X POST "$BOT2_API/ingest-fixed-fallback" \
+                -H "Authorization: Bearer $OIDC" \
+                -H "content-type: application/json" \
+                --data-binary @"$payload" | python -c 'import json,sys; d=json.load(sys.stdin); print("BOT2_SOURCE_FALLBACK",json.dumps(d,ensure_ascii=False))'
+            done
+          fi
           curl --fail-with-body --retry 5 --retry-delay 3 --retry-max-time 30 --retry-all-errors -sS -X POST "$BOT2_API/next" \
             -H "Authorization: Bearer $OIDC" \
             -H "content-type: application/json" \
             --data-binary @bot2-next-request.json > bot2-job.json
           STAGE="$(python -c 'import json; print(json.load(open("bot2-job.json")).get("stage",""))')"
-          if [ "$STAGE" = "target_missing" ] || [ "$STAGE" = "already_completed" ]; then
+          if [ "$STAGE" = "already_completed" ]; then
             echo "run_job=false" >> "$GITHUB_OUTPUT"
             echo "reuse_source=false" >> "$GITHUB_OUTPUT"
             python - <<'PY'
@@ -97,13 +133,11 @@ jobs:
           PY
             exit 0
           fi
-          if [ "$STAGE" = "target_unavailable" ]; then
-            echo "run_job=false" >> "$GITHUB_OUTPUT"
-            echo "reuse_source=false" >> "$GITHUB_OUTPUT"
+          if [ "$STAGE" = "target_missing" ]; then
             python - <<'PY'
           import json
           d=json.load(open("bot2-job.json",encoding="utf-8"))
-          print("::error title=Bot2 source unavailable::"+json.dumps(d,ensure_ascii=False))
+          print("::error title=Bot2 exact episode not found after API+yt-dlp fallback::"+json.dumps(d,ensure_ascii=False))
           PY
             exit 5
           fi

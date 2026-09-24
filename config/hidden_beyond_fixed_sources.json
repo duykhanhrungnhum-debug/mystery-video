@@ -12,8 +12,8 @@
       "channel_name": "伊伊動漫",
       "channel_url": "https://www.youtube.com/channel/UC1OiBb6ueh8_oe6b8jsYfzA",
       "series_title": "誰讓這個文盲修仙的",
-      "verified_seed_video_ids": [
-        "LESUDwiHlU4"
+      "seed_video_urls": [
+        "https://www.youtube.com/watch?v=vaY4URFw0cg"
       ]
     },
     {
@@ -23,7 +23,7 @@
       "channel_name": "Chibi Succubus小不點魅磨",
       "channel_url": "https://www.youtube.com/channel/UCcE6JHycML1AymdKBUfqxmw",
       "series_title": "被迫收下的徒弟竟然成了通天大帝",
-      "verified_seed_video_ids": []
+      "seed_video_urls": []
     },
     {
       "rotation_order": 3,
@@ -32,7 +32,7 @@
       "channel_name": "时光动漫社",
       "channel_url": "https://www.youtube.com/channel/UCNrAnwbmtzVwgyRHzvMxL3w",
       "series_title": "种出全星际净土",
-      "verified_seed_video_ids": []
+      "seed_video_urls": []
     },
     {
       "rotation_order": 4,
@@ -41,7 +41,7 @@
       "channel_name": "贫道爱乱来沙雕剧场",
       "channel_url": "https://www.youtube.com/channel/UCstUf0tnKCCU5E9puvOHA7g",
       "series_title": "前往濒亡世界，拯救客户活过天灾",
-      "verified_seed_video_ids": []
+      "seed_video_urls": []
     },
     {
       "rotation_order": 5,
@@ -50,14 +50,17 @@
       "channel_name": "生活三字经《看听读》",
       "channel_url": "https://www.youtube.com/channel/UCt-ZyeaZ2FLNRgZ4mWaZ74A",
       "series_title": "无敌修仙",
-      "verified_seed_video_ids": []
+      "seed_video_urls": []
     }
   ],
-  "locator_policy": "verified_registry_only",
-  "source_health_policy": {
-    "failure_isolation": "per_source",
-    "scheduled_unavailable_action": "skip_source_continue_rotation",
-    "exact_unavailable_action": "stop_before_download_and_gpu",
-    "broad_channel_search": false
+  "source_access_policy": {
+    "fixed_sources_are_trusted": true,
+    "discovery_order": [
+      "youtube_data_api",
+      "yt_dlp_fixed_channel_or_seed"
+    ],
+    "identity_reverification_each_run": false,
+    "on_api_failure": "fallback_without_quarantine",
+    "discover_new_sources": false
   }
 }

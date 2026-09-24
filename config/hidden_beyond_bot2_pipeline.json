@@ -14,9 +14,7 @@
   "source_discovery": false,
   "one_episode_per_job": true,
   "stages": [
-    "refresh_fixed_source_registry",
-    "resolve_verified_source_locator",
-    "verify_source_health",
+    "refresh_fixed_sources",
     "select_fixed_source_episode",
     "acquire_source_cpu",
     "verify_source_media",
@@ -82,18 +80,11 @@
     "database_finalized",
     "controller_idle_completed"
   ],
-  "source_resilience": {
-    "locator_registry": "verified_only",
-    "locator_types": [
-      "channel_id",
-      "uploads_playlist_id",
-      "seed_video_id"
-    ],
-    "per_source_failure_isolation": true,
-    "durable_source_metadata": true,
-    "infer_explicit_episode_from_title": true,
-    "no_broad_source_search": true,
-    "unavailable_source_schedule_behavior": "skip_and_continue",
-    "unavailable_source_exact_behavior": "fail_before_download_gpu"
+  "source_access": {
+    "fixed_sources_are_trusted": true,
+    "api_first": true,
+    "yt_dlp_fallback": true,
+    "quarantine_fixed_source": false,
+    "broad_source_search": false
   }
 }
