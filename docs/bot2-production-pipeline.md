@@ -52,10 +52,7 @@ Bot2 has two deliberately different selection modes:
   check the next fixed source in rotation order. One workflow invocation claims
   at most one episode.
 
-The pre-selection refresh never searches YouTube for new channels. It reads only
-the uploads playlists of the five fixed channel IDs, matches videos to the
-already tracked series, and only queues items whose current YouTube metadata is
-Public and Creative Commons.
+The pre-selection refresh never searches broadly for new channels. It reads the\nfive fixed sources and their admin-configured failover seeds, matches videos to\nthe tracked series, and only queues items whose current YouTube metadata is\nPublic. The current YouTube license value is recorded for evidence but is not a\nproduction gate for the already configured fixed-source pool.
 
 
 

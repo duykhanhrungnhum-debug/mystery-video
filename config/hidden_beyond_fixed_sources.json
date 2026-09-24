@@ -65,5 +65,11 @@
     "identity_reverification_each_run": false,
     "on_api_failure": "fallback_without_quarantine",
     "discover_new_sources": false
+  },
+  "source_item_policy": {
+    "fixed_source_public_required": true,
+    "creative_commons_required": false,
+    "record_youtube_license": true,
+    "new_source_discovery": false
   }
 }

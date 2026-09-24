@@ -86,5 +86,10 @@
     "yt_dlp_fallback": true,
     "quarantine_fixed_source": false,
     "broad_source_search": false
+  },
+  "source_item_policy": {
+    "eligibility": "public_from_fixed_source_or_admin_seed",
+    "creative_commons_required": false,
+    "record_license": true
   }
 }

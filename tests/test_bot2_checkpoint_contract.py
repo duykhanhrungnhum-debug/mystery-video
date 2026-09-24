@@ -137,7 +137,7 @@ def test_daily_refresh_is_fixed_source_only_and_runs_before_selection():
     assert "for(const fixed of FIXED)" in edge
     assert 'src.approval_status!=="approved"' in edge
     assert 'privacyStatus||"")!=="public"' in edge
-    assert 'license||"")!=="creativeCommon"' in edge
+    assert 'const itemLicense=String(v?.status?.license||"youtube")' in edge
     assert "titleKey.includes(key)" in edge
     assert 'source_url:"https://www.youtube.com/watch?v="+id' in edge
     assert 'rights_status:"approved"' in edge
@@ -231,3 +231,11 @@ def test_series_matching_normalizes_traditional_and_simplified_chinese():
     assert '"這":"这"' in edge
     assert '"個":"个"' in edge
     assert '.split("").map(ch=>tradToSimp[ch]||ch).join("")' in edge
+
+
+def test_fixed_source_public_policy_does_not_block_standard_youtube_license():
+    edge = EDGE.read_text(encoding="utf-8")
+    assert '"not_creative_common"' not in edge
+    assert 'license_type:itemLicense' in edge
+    assert 'Fixed-source policy: public item' in edge
+    assert 'privacyStatus||"")!=="public"' in edge

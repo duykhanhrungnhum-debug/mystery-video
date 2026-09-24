@@ -310,7 +310,7 @@ async function refreshFixedSources(db:any){
 
         for(const v of matches){
           if(String(v?.status?.privacyStatus||"")!=="public") continue;
-          if(String(v?.status?.license||"")!=="creativeCommon") continue;
+          const itemLicense=String(v?.status?.license||"youtube");
           const title=String(v?.snippet?.title||v.id);
           let episode=inferEpisodeNumber(title);
           if(episode<=0){
@@ -327,9 +327,9 @@ async function refreshFixedSources(db:any){
             source_item_id:String(v.id),
             source_url:"https://www.youtube.com/watch?v="+String(v.id),
             title,series_title:String(series.series_title||""),
-            episode_number:episode,license_type:"creativeCommon",
+            episode_number:episode,license_type:itemLicense,
             rights_status:"approved",
-            rights_basis:"YouTube Data API reports Creative Commons for this selected source item.",
+            rights_basis:"Fixed-source policy: public item from the configured source pool; YouTube license="+itemLicense+".",
             evidence_url:"https://www.youtube.com/watch?v="+String(v.id),
             attribution_text:String(src.name||""),active:true,checked_at:now,
             source_channel_id:String(v?.snippet?.channelId||channelId),
@@ -399,7 +399,7 @@ async function ingestFixedFallbackCandidates(db:any,body:any){
     const title=String(v?.snippet?.title||c?.title||id);
     if(!normalizeSeriesMatch(title).includes(key)){rejected.push({source_item_id:id,reason:"series_title_mismatch"});continue;}
     if(String(v?.status?.privacyStatus||"")!=="public"){rejected.push({source_item_id:id,reason:"not_public"});continue;}
-    if(String(v?.status?.license||"")!=="creativeCommon"){rejected.push({source_item_id:id,reason:"not_creative_common"});continue;}
+    const itemLicense=String(v?.status?.license||"youtube");
     let episode=inferEpisodeNumber(title);
     if(episode<=0){
       const hinted=Number(c?.episode_number||0);
@@ -418,8 +418,8 @@ async function ingestFixedFallbackCandidates(db:any,body:any){
       source_id:sourceId,series_id:seriesId,source_item_id:id,
       source_url:"https://www.youtube.com/watch?v="+id,title,
       series_title:String(seriesQ.data.series_title||""),episode_number:episode,
-      license_type:"creativeCommon",rights_status:"approved",
-      rights_basis:"YouTube Data API reports Creative Commons for this selected source item.",
+      license_type:itemLicense,rights_status:"approved",
+      rights_basis:"Fixed-source policy: public item from an admin-configured source/seed; YouTube license="+itemLicense+".",
       evidence_url:"https://www.youtube.com/watch?v="+id,
       attribution_text:String(srcQ.data.name||""),active:true,checked_at:now,
       source_channel_id:String(v?.snippet?.channelId||c?.source_channel_id||""),
