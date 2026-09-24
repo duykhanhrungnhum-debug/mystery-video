@@ -207,16 +207,27 @@ async function refreshFixedSources(db:any){
       continue;
     }
 
-    const plUrl=new URL("https://www.googleapis.com/youtube/v3/playlistItems");
-    plUrl.searchParams.set("part","snippet,contentDetails");
-    plUrl.searchParams.set("playlistId",uploads);
-    plUrl.searchParams.set("maxResults","50");
-    const pl=await youtubeJson(yt.token,plUrl);
-    const uploadIds=(pl?.items||[])
-      .map((x:any)=>String(x?.contentDetails?.videoId||x?.snippet?.resourceId?.videoId||""))
-      .filter(Boolean);
+    // Backfill must not depend on only the 50 newest channel uploads.
+    // Scan bounded playlist pages so an approved sequential episode can still be
+    // discovered after the channel has published many unrelated videos.
+    const uploadIds:string[]=[];
+    let pageToken="";
+    const maxUploadPages=10;
+    for(let page=0;page<maxUploadPages;page++){
+      const plUrl=new URL("https://www.googleapis.com/youtube/v3/playlistItems");
+      plUrl.searchParams.set("part","snippet,contentDetails");
+      plUrl.searchParams.set("playlistId",uploads);
+      plUrl.searchParams.set("maxResults","50");
+      if(pageToken) plUrl.searchParams.set("pageToken",pageToken);
+      const pl=await youtubeJson(yt.token,plUrl);
+      const ids=(pl?.items||[])
+        .map((x:any)=>String(x?.contentDetails?.videoId||x?.snippet?.resourceId?.videoId||""))
+        .filter(Boolean);
+      uploadIds.push(...ids);
+      pageToken=String(pl?.nextPageToken||"");
+      if(!pageToken) break;
+    }
     const uploadMeta=await youtubeVideosByIds(yt.token,uploadIds);
-    const uploadById=new Map(uploadMeta.map((x:any)=>[String(x.id),x]));
 
     const seriesQ=await db.from("source_series")
       .select("id,source_id,series_title,latest_episode_seen,last_ingested_episode,active,state")

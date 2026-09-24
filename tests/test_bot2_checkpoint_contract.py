@@ -153,3 +153,12 @@ def test_source_refresh_never_searches_for_new_channels():
     assert "search.list" not in edge
     assert "youtube/v3/search" not in edge
     assert 'channelIdFromUrl(src.channel_url)' in edge
+
+
+def test_source_refresh_paginates_channel_uploads_for_sequential_backfill():
+    edge = EDGE.read_text(encoding="utf-8")
+    assert 'const maxUploadPages=10' in edge
+    assert 'plUrl.searchParams.set("pageToken",pageToken)' in edge
+    assert 'pageToken=String(pl?.nextPageToken||"")' in edge
+    assert 'if(!pageToken) break' in edge
+    assert 'uploadIds.push(...ids)' in edge
